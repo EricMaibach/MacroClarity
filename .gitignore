@@ -37,3 +37,6 @@ playwright-report/
 
 docs/roles/
 docs/test-plans/
+
+# Quarterly report data (large JSONL files for ML training)
+signaltrackers/data/quarterly_reports/

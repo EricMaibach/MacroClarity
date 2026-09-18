@@ -1,245 +1,49 @@
-# SignalTrackers
+# MacroClarity
 
-**Comprehensive macro intelligence for individual investors**
+**An experiment in AI-driven development.**
 
-Stop reading dozens of financial sources daily. SignalTrackers synthesizes 50+ market indicators across all asset classes into clear, actionable intelligence - helping you understand market conditions at a glance.
+I wanted to answer a few questions for myself: how much of the development process can AI actually handle? As a codebase grows past toy size, can AI still manage it? What practices make it work?
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+So I built a real product to find out — a macro financial dashboard that collects market data, uses AI to analyze it, and explains it in terms an average individual investor can follow. The product is genuine and it works. But the reason it exists was to run the experiment, and this README is about what I learned.
 
----
+## What happened
 
-## 🎯 What is SignalTrackers?
+Nine AI agents ran the product development lifecycle — research, strategy, product management, design, engineering, and QA — coordinating through GitHub Issues and Discussions. I approved features and merged pull requests. Everything in between was automated.
 
-SignalTrackers is a **macro financial dashboard** designed for individual investors with significant portfolios ($100K+) who want professional-grade market intelligence without the noise.
+Over roughly ten weeks it shipped **181 merged pull requests across 71 user stories and 16 release phases**, including real domain complexity: a four-dimension macro regime engine, Taylor-rule policy scoring, three independent recession models, and FinBERT sentiment analysis over SEC filings.
 
-### The Problem
-Individual investors face information overload:
-- Dozens of financial sites to monitor daily
-- Data without context or historical perspective
-- No synthesis showing how signals relate to each other
-- Unclear how market conditions affect *your* specific portfolio
+However, it also produced a codebase that is not well structured — the main application file grew from 1,400 to over 6,000 lines and no agent ever proposed breaking it up — and it went off on some wrong tangents that had to be walked back.
 
-### The Solution
-SignalTrackers provides:
-- **AI-powered briefings** that distill what matters from 50+ metrics
-- **Personal context** - see how current conditions affect your portfolio
-- **Historical perspective** - percentile rankings show where we are vs. 10+ years of data
-- **Comprehensive coverage** - credit, equities, rates, crypto, currencies, safe havens
+## How it worked
 
----
+```
+IDEATION   Researcher ┐
+           Designer   ├─→ CEO decides ─→ PM writes feature ─→ ◆ human approves
+           Engineer   ┘
 
-## ✨ Key Features
+BUILD      QA test plan ─→ Engineer ─→ Designer review ─→ QA verify ─→ PR ─→ ◆ human merges
+                              ↑              │               │
+                              └──────────────┴───────────────┘
+                                   rejections loop back
 
-### 📊 Market Intelligence
-- **50+ Macro Indicators**: Credit spreads, equity volatility, Treasury curves, currency flows, crypto sentiment, and more
-- **Historical Context**: Every metric includes percentile rankings vs. 10+ years of data
-- **AI Synthesis**: Daily briefings explain what's happening and why it matters
-- **What's Moving Today**: Instant view of the biggest market shifts
-
-### 💼 Portfolio Analysis
-- **Personal Context**: See how current market conditions affect your specific holdings
-- **Risk Assessment**: Understand your exposure to different market regimes
-- **Template Library**: Quick setup with pre-built allocations (60/40, All Weather, etc.)
-
-### 🔔 Smart Alerts
-- **Custom Thresholds**: Get notified when metrics cross levels that matter to you
-- **Email Delivery**: Daily briefings and alerts sent to your inbox
-- **Flexible Scheduling**: Choose your briefing frequency and delivery times
-
-### 🤖 AI-Powered Chat
-- **Conversational Analysis**: Ask questions about market data in natural language
-- **Historical Queries**: "What happened to VIX in March 2020?" or "Show me credit spreads during 2008"
-- **Multi-Provider Support**: Choose between OpenAI and Anthropic Claude
-
----
-
-## 🚀 Why SignalTrackers?
-
-### Comprehensive, Not Niche
-We track the full macro picture - not just one thesis or asset class. Our coverage spans:
-- Credit markets (HY spreads, IG spreads, TED spread)
-- Equity markets (VIX, sector performance, market breadth)
-- Fixed income (yield curves, TIPS breakevens)
-- Currencies (DXY, EM flows, crypto)
-- Safe havens (gold, Treasuries, volatility)
-
-### Signal Synthesis, Not Data Dump
-Our AI briefings don't just list what happened - they explain:
-- **What's significant** - Which moves are historically unusual?
-- **What it means** - How do different signals relate to each other?
-- **What to watch** - Where might conditions be shifting?
-
-### Built for Individual Investors
-Unlike institutional tools, SignalTrackers:
-- Runs on your laptop - no subscriptions or data fees for core features
-- Supports typical retail portfolios - stocks, bonds, ETFs
-- Focuses on macro conditions - not trade signals or timing models
-- Respects your time - briefings over real-time data feeds
-
----
-
-## 🛠️ Getting Started
-
-### Prerequisites
-- Python 3.11 or higher
-- (Optional) API keys for AI providers (OpenAI or Anthropic Claude)
-- (Optional) FRED API key for automatic data updates
-
-### Quick Start
-
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/EricMaibach/financial.git
-   cd financial
-   ```
-
-2. **Set up environment**
-   ```bash
-   cp .env.example .env
-   # Edit .env with your configuration (see Configuration section)
-   ```
-
-3. **Install dependencies**
-   ```bash
-   cd signaltrackers
-   pip install -r requirements.txt
-   ```
-
-4. **Initialize the database**
-   ```bash
-   # Migrations will run automatically on first launch
-   python dashboard.py
-   ```
-
-5. **Access the dashboard**
-   ```
-   Open http://localhost:5000 in your browser
-   ```
-
-### Configuration
-
-Edit your `.env` file with the following:
-
-#### Required (for multi-user mode)
-- `SECRET_KEY` - Flask session secret (generate with `python -c "import secrets; print(secrets.token_hex(32))"`)
-
-#### Optional (but recommended)
-- `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` - For AI briefings and chat
-- `FRED_API_KEY` - For automatic data updates ([get your key](https://fred.stlouisfed.org/docs/api/api_key.html))
-- `TAVILY_API_KEY` - For web search in AI chat ([get your key](https://tavily.com/))
-
-#### Email Alerts (optional)
-- `MAIL_SERVER`, `MAIL_PORT`, `MAIL_USERNAME`, `MAIL_PASSWORD` - SMTP configuration for alerts
-- We recommend [Brevo (Sendinblue)](https://www.brevo.com) - 300 emails/day free tier
-
-See [`.env.example`](.env.example) for complete configuration options.
-
-### Data Collection
-
-SignalTrackers includes historical data for immediate use. To update with latest market data:
-
-```bash
-python signaltrackers/market_signals.py
+           ◆ = the only two points where a human was required
 ```
 
-Set up automated daily updates with cron:
-```bash
-0 18 * * 1-5 cd /path/to/signaltrackers && python market_signals.py
-```
+GitHub labels were the entire state machine — no orchestrator, no queue, no message bus. Each agent woke on a timer, asked GitHub what was in its queue, did exactly one thing, moved the label, and exited. The pipeline advanced because the next agent's poll found different state.
 
-For detailed data collection setup, see [`signaltrackers/DATA_COLLECTION_GUIDE.md`](signaltrackers/DATA_COLLECTION_GUIDE.md).
+Two details mattered more than I expected. Agents reviewing each other will argue indefinitely, so rejection cycles were capped and escalated to me on the third. And because only a human could merge, an open pull request stalled the entire pipeline until I dealt with it — the approval gate was real backpressure rather than a policy.
 
----
+## What I learned
 
-## 📖 Documentation
+- Splitting work across agents with different perspectives creates a genuinely adversarial review process, and review quality improved because of it.
+- Divide memory based on scope:
+    - **Task memory** scoped to the task, stored as comments on the GitHub issue. It can be shared across the agents and humans working on that task, and it records a history of what was done and why.
+    - **Role memory** scoped to the role, so different instances of a role share what they know, but memory does not leak to other agents and erode the adversarial review effect.
+- Having the engineer agent generate screenshots of the UI whenever it made UI changes, so the designer agent could review them, dramatically decreased UI issues.
+- AI never got to the point where it could not manage the code, but it did not do a great job of organizing and structuring it — it tends to just add. The same thing happened with the UI, until a dedicated designer agent working from a documented design framework turned that around. An architect agent with a defined architecture and philosophy would likely do the same for code structure, though I expect it would still need more human review than the design side did.
+- The framework for automating the agents needed to be better — tighter security restrictions and real logging.
+- AI needs to amplify your expertise, not replace it. Because I am a novice at macro finance, AI was able to take me fairly far down some bad paths on features and analysis techniques that sounded really good but were actually invalid.
 
-- **[Dashboard Quick Start](signaltrackers/DASHBOARD_QUICKSTART.md)** - Get up and running fast
-- **[Data Collection Guide](signaltrackers/DATA_COLLECTION_GUIDE.md)** - Setting up automated data updates
-- **[Product Roadmap](docs/roles/pm-context.md)** - Vision and planned features
-- **[Contributing Guide](CLAUDE.md)** - Development workflow and standards
+## The product
 
----
-
-## 🗺️ Product Vision
-
-SignalTrackers aims to be the **go-to macro intelligence platform for individual investors**.
-
-### What We Are
-- A comprehensive market dashboard synthesizing 50+ indicators
-- An AI-powered briefing service explaining what's happening
-- A portfolio context tool showing how conditions affect your holdings
-
-### What We're NOT
-- ❌ A trading signal service (no "buy/sell" recommendations)
-- ❌ A real-time trading platform (macro focus, daily updates)
-- ❌ A single-thesis product (comprehensive coverage, not one narrative)
-
-### Success Metrics
-We measure success by:
-- User perception: "comprehensive macro intelligence" vs. "niche tool"
-- Signup → Active User conversion
-- AI feature trial usage within first session
-- Users with configured alerts
-
----
-
-## 🤝 Contributing
-
-We welcome contributions! SignalTrackers is actively developed and open to:
-- Bug fixes and feature improvements
-- New data sources or metrics
-- UI/UX enhancements
-- Documentation improvements
-
-See [CLAUDE.md](CLAUDE.md) for development workflow, including:
-- GitHub issue management
-- Milestone-based planning
-- PR submission process
-
----
-
-## 📊 Project Status
-
-**Current Version**: 2.0 (Phase 2: Consolidation & Templates)
-
-**Recent Milestones**:
-- ✅ Phase 1: Repositioning & Core Gaps - Homepage overhaul, comprehensive metric coverage
-- 🔄 Phase 2: Consolidation & Templates - Streamlining pages, portfolio templates
-- 📋 Phase 3: Onboarding & Trial - Hosted trial mode, setup wizard
-- 📋 Phase 4: Mobile & Polish - Mobile experience, final polish
-
-See [open issues](https://github.com/EricMaibach/financial/issues) for current work.
-
----
-
-## 🔐 Security & Privacy
-
-- **Local-first**: Runs on your machine - your portfolio data stays private
-- **Encrypted credentials**: User API keys stored with Fernet encryption
-- **No tracking**: No analytics, no data collection, no third-party tracking
-- **Open source**: Audit the code yourself
-
----
-
-## 📝 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-
-## 🙋 Support
-
-- **Issues**: [GitHub Issues](https://github.com/EricMaibach/financial/issues)
-- **Documentation**: See `docs/` directory for detailed guides
-- **Questions**: Open a discussion or issue on GitHub
-
----
-
-## 🌟 Why "SignalTrackers"?
-
-The name reflects our philosophy: we **track signals** across the full macro landscape - not just one thesis, not just equities, not just credit. We synthesize diverse market indicators into clear intelligence, helping you separate signal from noise.
-
----
-
-**Ready to get started?** Follow the [Quick Start](#-getting-started) guide above or check out the [Dashboard Quick Start](signaltrackers/DASHBOARD_QUICKSTART.md) for a detailed walkthrough.
+A macro dashboard for individual investors: 50+ indicators with historical percentile context, AI-generated daily briefings, portfolio analysis, and a chat interface for asking questions about the data. Python, Flask, SQLAlchemy, Docker, deployed via GitHub Actions.

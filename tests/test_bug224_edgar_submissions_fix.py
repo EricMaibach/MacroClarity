@@ -24,8 +24,11 @@ def read_source(filename):
         return f.read()
 
 
-def _make_submissions_json(accession_numbers, forms, filing_dates, primary_docs):
+def _make_submissions_json(accession_numbers, forms, filing_dates, primary_docs, items=None):
     """Helper: build a minimal EDGAR submissions API response."""
+    if items is None:
+        # Default: mark all 8-K filings as earnings (Item 2.02)
+        items = ["2.02,9.01" if f == "8-K" else "" for f in forms]
     return {
         "filings": {
             "recent": {
@@ -33,6 +36,7 @@ def _make_submissions_json(accession_numbers, forms, filing_dates, primary_docs)
                 "form": forms,
                 "filingDate": filing_dates,
                 "primaryDocument": primary_docs,
+                "items": items,
             }
         }
     }
@@ -311,8 +315,8 @@ class TestFetchRecentFilingsHappyPath(unittest.TestCase):
         result = self.fetch_fn(SAMPLE_CIK, SAMPLE_QUARTER, SAMPLE_YEAR)
 
         self.assertEqual(len(result), 1)
-        self.assertIn("Apple", result[0])
-        self.assertNotIn("aapl:Zero500NotesDue", result[0])
+        self.assertIn("Apple", result[0]["text"])
+        self.assertNotIn("aapl:Zero500NotesDue", result[0]["text"])
 
     @patch('time.sleep')
     @patch('requests.get')
@@ -407,35 +411,48 @@ class TestFetchFilingsEdgeCases(unittest.TestCase):
 
     @patch('time.sleep')
     @patch('requests.get')
-    def test_no_ex991_falls_back_to_primary_doc(self, mock_get, mock_sleep):
-        """When index has no EX-99.1 row, falls back to primary document text."""
-        index_html_no_ex991 = "<html><table><tr><td>EX-10.1</td><td><a href='/Archives/edgar/data/320193/abc/doc.htm'>doc</a></td></tr></table></html>"
-        primary_text = "Pursuant to the requirements of the Securities Exchange Act..."
-
-        submissions_resp = _make_mock_response(json_data=_make_submissions_response())
-        index_resp = _make_mock_response(text=index_html_no_ex991)
-        primary_resp = _make_mock_response(text=primary_text)
-        mock_get.side_effect = [submissions_resp, index_resp, primary_resp]
+    def test_non_earnings_8k_items_are_excluded(self, mock_get, mock_sleep):
+        """8-K filings without Item 2.02 (earnings) are skipped."""
+        submissions_data = _make_submissions_json(
+            accession_numbers=["0000320193-24-000001"],
+            forms=["8-K"],
+            filing_dates=["2024-01-15"],
+            primary_docs=["doc.htm"],
+            items=["8.01,9.01"],  # Not an earnings filing
+        )
+        mock_get.return_value = _make_mock_response(json_data=submissions_data)
 
         result = self.fetch_fn(SAMPLE_CIK, SAMPLE_QUARTER, SAMPLE_YEAR)
-
-        self.assertEqual(len(result), 1)
-        self.assertIn("Securities Exchange Act", result[0])
+        self.assertEqual(result, [])
+        # Only one request (submissions); no index fetch needed
+        self.assertEqual(mock_get.call_count, 1)
 
     @patch('time.sleep')
     @patch('requests.get')
-    def test_ex991_http_error_falls_back_to_primary_doc(self, mock_get, mock_sleep):
-        """When EX-99.1 fetch returns HTTP error, falls back to primary doc."""
+    def test_no_ex991_skips_filing(self, mock_get, mock_sleep):
+        """When index has no EX-99.1 row, filing is skipped (not an earnings release)."""
+        index_html_no_ex991 = "<html><table><tr><td>EX-10.1</td><td><a href='/Archives/edgar/data/320193/abc/doc.htm'>doc</a></td></tr></table></html>"
+
         submissions_resp = _make_mock_response(json_data=_make_submissions_response())
-        index_resp = _make_mock_response(text=SAMPLE_INDEX_HTML)
-        ex991_error = _make_mock_response(status_code=404)
-        primary_resp = _make_mock_response(text="Primary document content")
-        mock_get.side_effect = [submissions_resp, index_resp, ex991_error, primary_resp]
+        index_resp = _make_mock_response(text=index_html_no_ex991)
+        mock_get.side_effect = [submissions_resp, index_resp]
 
         result = self.fetch_fn(SAMPLE_CIK, SAMPLE_QUARTER, SAMPLE_YEAR)
 
-        self.assertEqual(len(result), 1)
-        self.assertIn("Primary document content", result[0])
+        self.assertEqual(result, [])
+
+    @patch('time.sleep')
+    @patch('requests.get')
+    def test_ex991_http_error_skips_filing(self, mock_get, mock_sleep):
+        """When EX-99.1 fetch returns HTTP error, filing is skipped."""
+        submissions_resp = _make_mock_response(json_data=_make_submissions_response())
+        index_resp = _make_mock_response(text=SAMPLE_INDEX_HTML)
+        ex991_error = _make_mock_response(status_code=404)
+        mock_get.side_effect = [submissions_resp, index_resp, ex991_error]
+
+        result = self.fetch_fn(SAMPLE_CIK, SAMPLE_QUARTER, SAMPLE_YEAR)
+
+        self.assertEqual(result, [])
 
     @patch('time.sleep')
     @patch('requests.get')
@@ -608,16 +625,14 @@ class TestPerformanceContracts(unittest.TestCase):
         submissions_resp = _make_mock_response(json_data=_make_submissions_response())
         index_resp = _make_mock_response(text=SAMPLE_INDEX_HTML)
         doc_resp = _make_mock_response(text="   \n  ")  # whitespace only
-        mock_get.side_effect = [submissions_resp, index_resp, doc_resp,
-                                _make_mock_response(text="")]  # primary fallback also empty
+        mock_get.side_effect = [submissions_resp, index_resp, doc_resp]
         result = self.fetch_fn(SAMPLE_CIK, SAMPLE_QUARTER, SAMPLE_YEAR)
         self.assertEqual(result, [])
 
     @patch('time.sleep')
     @patch('requests.get')
-    def test_text_truncated_to_max_finbert_chars(self, mock_get, mock_sleep):
-        """Returned texts must not exceed _MAX_FINBERT_INPUT_CHARS."""
-        import sector_tone_pipeline as stp
+    def test_full_text_preserved_without_truncation(self, mock_get, mock_sleep):
+        """Returned texts must contain full untruncated content for training use."""
         long_text = "earnings " * 10000  # Very long earnings text
         submissions_resp = _make_mock_response(json_data=_make_submissions_response())
         index_resp = _make_mock_response(text=SAMPLE_INDEX_HTML)
@@ -627,7 +642,8 @@ class TestPerformanceContracts(unittest.TestCase):
         result = self.fetch_fn(SAMPLE_CIK, SAMPLE_QUARTER, SAMPLE_YEAR)
 
         self.assertEqual(len(result), 1)
-        self.assertLessEqual(len(result[0]), stp._MAX_FINBERT_INPUT_CHARS)
+        # Full text is preserved (not truncated to _MAX_FINBERT_INPUT_CHARS)
+        self.assertGreater(len(result[0]["text"]), 2048)
 
     @patch('time.sleep')
     @patch('requests.get')
@@ -662,16 +678,17 @@ class TestAcceptanceCriteria(unittest.TestCase):
         src = read_source('sector_tone_pipeline.py')
         self.assertIn('_extract_ex991_url', src)
 
-    def test_ac3_fallback_to_primary_doc_if_no_ex991(self):
-        """AC: fallback to primary doc text if no EX-99.1 is found."""
+    def test_ac3_item_202_filter_and_ex991_check(self):
+        """AC: 8-K filings filtered by Item 2.02 (earnings) and EX-99.1 presence."""
         src = read_source('sector_tone_pipeline.py')
-        # The fallback uses primary_doc variable
         import ast
         tree = ast.parse(src)
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef) and node.name == '_fetch_recent_8k_filing_texts':
                 func_src = ast.get_source_segment(src, node) or ''
-                self.assertIn('primary_doc', func_src)
+                # Must filter on Item 2.02 and check for EX-99.1
+                self.assertIn('2.02', func_src)
+                self.assertIn('not ex99_url', func_src)
                 return
         self.fail('_fetch_recent_8k_filing_texts not found')
 
@@ -697,7 +714,7 @@ class TestAcceptanceCriteria(unittest.TestCase):
 
         self.assertEqual(len(result), 1)
         # Verify it contains earnings prose, not XBRL boilerplate
-        self.assertNotIn('aapl:Zero500NotesDue', result[0])
+        self.assertNotIn('aapl:Zero500NotesDue', result[0]["text"])
 
 
 # ---------------------------------------------------------------------------

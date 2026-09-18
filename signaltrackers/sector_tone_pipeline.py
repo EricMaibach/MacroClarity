@@ -50,6 +50,9 @@ SCORE_THRESHOLD = 0.15
 # Cache file path
 CACHE_FILE = Path(__file__).parent / 'data' / 'sector_tone_cache.json'
 
+# Directory for saved quarterly report texts (JSONL)
+QUARTERLY_REPORTS_DIR = Path(__file__).parent / 'data' / 'quarterly_reports'
+
 # All 11 GICS sector names (canonical ordering)
 GICS_SECTORS: list[str] = [
     "Information Technology",
@@ -214,6 +217,11 @@ def _strip_html(raw: str) -> str:
     instead of prose — this helper removes tags and decodes HTML entities
     using only Python builtins (no extra dependency required).
     """
+    # Remove entire SGML envelope (everything before the first <html or <body)
+    body_match = re.search(r'<(?:html|body)\b', raw, re.IGNORECASE)
+    if body_match:
+        raw = raw[body_match.start():]
+
     # Remove SGML envelope headers (e.g. <DOCUMENT>, <TYPE>EX-99.1, etc.)
     text = re.sub(r'<(?!/?[a-zA-Z])[^>]*>', '', raw)
     # Strip HTML tags
@@ -222,7 +230,16 @@ def _strip_html(raw: str) -> str:
     text = html.unescape(text)
     # Collapse whitespace
     text = re.sub(r'\s+', ' ', text).strip()
-    return text
+
+    # Remove exhibit header artifacts (e.g. "EX-99.1 2 filename.htm EX-99.1 Document")
+    text = re.sub(
+        r'^EX-\d+\.\d+\s+\d+\s+\S+\.htm\s+EX-\d+\.\d+\s+Document\s*',
+        '', text, flags=re.IGNORECASE,
+    )
+    # Remove "Exhibit 99.1" header line
+    text = re.sub(r'^Exhibit\s+\d+\.\d+\s*', '', text, flags=re.IGNORECASE)
+
+    return text.strip()
 
 
 def _extract_ex991_url(index_html: str, int_cik: int, accession_clean: str) -> Optional[str]:
@@ -248,16 +265,19 @@ def _fetch_recent_8k_filing_texts(
     cik: str,
     quarter: str,
     year: int,
-) -> list[str]:
-    """Fetch text from recent 8-K earnings filings for a company in the given quarter.
+) -> list[dict]:
+    """Fetch text and metadata from recent 8-K earnings filings for a company.
 
     Uses the EDGAR submissions API (company-specific by design) to get the
-    8-K filing list for the company, fetches each filing's index HTML to
-    locate the EX-99.1 earnings press release, and returns the press release
-    text. Falls back to the primary document if no EX-99.1 is present.
+    8-K filing list for the company. Filters for Item 2.02 ("Results of
+    Operations and Financial Condition") to target earnings releases only,
+    then fetches the EX-99.1 press release text from the filing index.
 
-    Returns a list of text strings (up to _MAX_FILINGS_PER_COMPANY), each at
-    most _MAX_FINBERT_INPUT_CHARS characters. Returns [] on any error.
+    Returns a list of dicts (up to _MAX_FILINGS_PER_COMPANY), each containing:
+        - text: full untruncated filing text
+        - accession_number: SEC accession number
+        - filing_date: ISO date string
+    Returns [] on any error.
     """
     headers = {"User-Agent": "SignalTrackers financial-research@signaltrackers.app"}
     startdt, enddt = _quarter_date_range(quarter, year)
@@ -277,32 +297,38 @@ def _fetch_recent_8k_filing_texts(
 
     time.sleep(_EDGAR_RATE_LIMIT_PAUSE)
 
-    # Step 2: Filter 8-K filings within the quarter date range
+    # Step 2: Filter 8-K filings with Item 2.02 (earnings) within the quarter
     recent = submissions.get("filings", {}).get("recent", {})
     accession_numbers = recent.get("accessionNumber", [])
     forms = recent.get("form", [])
     filing_dates = recent.get("filingDate", [])
     primary_docs = recent.get("primaryDocument", [])
+    items_list = recent.get("items", [])
 
-    matching: list[tuple[str, str]] = []  # (accession_no, primary_doc)
-    for accession, form, filing_date, primary_doc in zip(
+    matching: list[tuple[str, str, str]] = []  # (accession_no, primary_doc, filing_date)
+    for i, (accession, form, filing_date, primary_doc) in enumerate(zip(
         accession_numbers, forms, filing_dates, primary_docs
-    ):
+    )):
         if form != "8-K":
             continue
         if not (startdt <= filing_date <= enddt):
             continue
-        matching.append((accession, primary_doc))
+        # Item 2.02 = "Results of Operations and Financial Condition" (earnings)
+        items = items_list[i] if i < len(items_list) else ""
+        if "2.02" not in items:
+            logger.debug("8-K %s has items=%s (no 2.02) — skipping", accession, items)
+            continue
+        matching.append((accession, primary_doc, filing_date))
         if len(matching) >= _MAX_FILINGS_PER_COMPANY:
             break
 
     if not matching:
         return []
 
-    texts: list[str] = []
+    results: list[dict] = []
     int_cik = int(cik)
 
-    for accession, primary_doc in matching:
+    for accession, primary_doc, filing_date in matching:
         accession_clean = accession.replace("-", "")
         index_url = (
             f"{_EDGAR_ARCHIVES_BASE}/{int_cik}/{accession_clean}/{accession}-index.htm"
@@ -321,34 +347,119 @@ def _fetch_recent_8k_filing_texts(
         time.sleep(_EDGAR_RATE_LIMIT_PAUSE)
 
         # Step 4: Locate EX-99.1 and fetch earnings press release text
+        # Skip filings without EX-99.1 (non-earnings 8-Ks like proxy votes,
+        # executive appointments, etc.)
         ex99_url = _extract_ex991_url(index_html, int_cik, accession_clean)
-        text = ""
-        if ex99_url:
-            try:
-                doc_resp = requests.get(ex99_url, timeout=_EDGAR_TIMEOUT, headers=headers)
-                doc_resp.raise_for_status()
-                text = _strip_html(doc_resp.text)[:_MAX_FINBERT_INPUT_CHARS]
-            except Exception as exc:
-                logger.warning("EDGAR EX-99.1 fetch failed for %s: %s", ex99_url, exc)
+        if not ex99_url:
+            logger.debug("No EX-99.1 in 8-K %s — skipping (not an earnings release)", accession)
+            time.sleep(_EDGAR_RATE_LIMIT_PAUSE)
+            continue
 
-        # Step 5: Fall back to primary document if no EX-99.1 text
-        if not text.strip() and primary_doc:
-            primary_url = (
-                f"{_EDGAR_ARCHIVES_BASE}/{int_cik}/{accession_clean}/{primary_doc}"
-            )
-            try:
-                doc_resp = requests.get(primary_url, timeout=_EDGAR_TIMEOUT, headers=headers)
-                doc_resp.raise_for_status()
-                text = _strip_html(doc_resp.text)[:_MAX_FINBERT_INPUT_CHARS]
-            except Exception as exc:
-                logger.warning("EDGAR primary doc fetch failed for %s: %s", primary_url, exc)
+        text = ""
+        try:
+            doc_resp = requests.get(ex99_url, timeout=_EDGAR_TIMEOUT, headers=headers)
+            doc_resp.raise_for_status()
+            text = _strip_html(doc_resp.text)
+        except Exception as exc:
+            logger.warning("EDGAR EX-99.1 fetch failed for %s: %s", ex99_url, exc)
 
         if text and text.strip():
-            texts.append(text)
+            results.append({
+                "text": text,
+                "accession_number": accession,
+                "filing_date": filing_date,
+            })
 
         time.sleep(_EDGAR_RATE_LIMIT_PAUSE)
 
-    return texts
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Quarterly report fetching (standalone — no FinBERT dependency)
+# ---------------------------------------------------------------------------
+
+
+def fetch_quarterly_reports(
+    quarter: Optional[str] = None,
+    year: Optional[int] = None,
+) -> list[dict]:
+    """Fetch quarterly 8-K filing texts for all sectors and save to JSONL.
+
+    This function can be called independently of the FinBERT scoring pipeline,
+    e.g. to collect training data for a local model. No ML dependencies required.
+
+    Args:
+        quarter: Quarter label (Q1–Q4). Defaults to current quarter.
+        year: Year. Defaults to current year.
+
+    Returns:
+        List of dicts, one per filing, each containing:
+            ticker, sector, quarter, year, filing_date, accession_number, text
+    """
+    current_dt = datetime.utcnow()
+    if quarter is None or year is None:
+        quarter, year = _get_quarter_label(current_dt)
+
+    logger.info("Fetching quarterly reports for %s %d", quarter, year)
+
+    try:
+        ticker_map = _fetch_edgar_ticker_map()
+        logger.info("Loaded %d tickers from EDGAR", len(ticker_map))
+    except Exception as exc:
+        logger.error("Failed to load EDGAR ticker map: %s — aborting fetch", exc)
+        return []
+
+    all_reports: list[dict] = []
+
+    for sector in GICS_SECTORS:
+        tickers = SP500_BY_SECTOR.get(sector, [])
+
+        for ticker in tickers:
+            cik = ticker_map.get(ticker.upper())
+            if not cik:
+                logger.debug("No CIK for ticker %s — skipping", ticker)
+                continue
+
+            filings = _fetch_recent_8k_filing_texts(cik, quarter, year)
+
+            for filing in filings:
+                all_reports.append({
+                    "ticker": ticker,
+                    "sector": sector,
+                    "quarter": quarter,
+                    "year": year,
+                    "filing_date": filing["filing_date"],
+                    "accession_number": filing["accession_number"],
+                    "text": filing["text"],
+                })
+
+    # Save to JSONL
+    if all_reports:
+        _save_reports_jsonl(all_reports, quarter, year)
+
+    logger.info(
+        "Fetched %d quarterly reports for %s %d",
+        len(all_reports), quarter, year,
+    )
+    return all_reports
+
+
+def _save_reports_jsonl(reports: list[dict], quarter: str, year: int) -> Path:
+    """Save fetched reports to a JSONL file in the quarterly_reports directory.
+
+    Returns the path to the written file.
+    """
+    QUARTERLY_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    filename = f"{year}_{quarter}_reports.jsonl"
+    filepath = QUARTERLY_REPORTS_DIR / filename
+
+    with open(filepath, "w") as f:
+        for report in reports:
+            f.write(json.dumps(report) + "\n")
+
+    logger.info("Saved %d reports to %s", len(reports), filepath)
+    return filepath
 
 
 # ---------------------------------------------------------------------------
@@ -437,6 +548,9 @@ def update_sector_management_tone() -> None:
     Intended to be called as a scheduled batch job (e.g., quarterly, after
     earnings season). This function is NOT called on each homepage request.
 
+    Fetches quarterly reports (saving full texts to JSONL), then scores
+    them with FinBERT for sector tone classification.
+
     Raises:
         ImportError: if the `transformers` package is not installed.
 
@@ -462,13 +576,13 @@ def update_sector_management_tone() -> None:
     quarter_label, year = _get_quarter_label(current_dt)
     logger.info("Running sector tone pipeline for %s %d", quarter_label, year)
 
-    # Fetch EDGAR ticker → CIK map
-    try:
-        ticker_map = _fetch_edgar_ticker_map()
-        logger.info("Loaded %d tickers from EDGAR", len(ticker_map))
-    except Exception as exc:
-        logger.error("Failed to load EDGAR ticker map: %s — using empty map", exc)
-        ticker_map = {}
+    # Fetch all quarterly reports (also saves full texts to JSONL)
+    reports = fetch_quarterly_reports(quarter_label, year)
+
+    # Group reports by sector for scoring
+    sector_reports: dict[str, list[dict]] = {}
+    for report in reports:
+        sector_reports.setdefault(report["sector"], []).append(report)
 
     # Load existing cache to preserve trend history across quarters
     existing = get_sector_management_tone() or {}
@@ -479,21 +593,16 @@ def update_sector_management_tone() -> None:
     sectors_output: list[dict] = []
 
     for sector in GICS_SECTORS:
-        tickers = SP500_BY_SECTOR.get(sector, [])
         sector_scores: list[float] = []
 
-        for ticker in tickers:
-            cik = ticker_map.get(ticker.upper())
-            if not cik:
-                logger.debug("No CIK for ticker %s — skipping", ticker)
-                continue
-
-            texts = _fetch_recent_8k_filing_texts(cik, quarter_label, year)
-
-            for text in texts:
-                if text and text.strip():
-                    score = _score_text_with_finbert(text, finbert_pipe)
-                    sector_scores.append(score)
+        for report in sector_reports.get(sector, []):
+            text = report["text"]
+            if text and text.strip():
+                # Truncate to FinBERT input limit for scoring only
+                score = _score_text_with_finbert(
+                    text[:_MAX_FINBERT_INPUT_CHARS], finbert_pipe,
+                )
+                sector_scores.append(score)
 
         if sector_scores:
             current_score = sum(sector_scores) / len(sector_scores)
