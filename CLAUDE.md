@@ -397,7 +397,7 @@ gh project item-edit --project-id PVT_kwHOAFS-6M4BO0V5 --id <item-id> --field-id
 
 ```bash
 # Step 1 — get issue node IDs:
-gh api graphql -f query='{ repository(owner: "EricMaibach", name: "financial") { issue(number: <num>) { id } } }'
+gh api graphql -f query='{ repository(owner: "EricMaibach", name: "MacroClarity") { issue(number: <num>) { id } } }'
 
 # Step 2 — add user story as sub-issue of a feature:
 gh api graphql -f query='mutation { addSubIssue(input: { issueId: "<parent-id>", subIssueId: "<child-id>" }) { issue { id } } }'
@@ -458,7 +458,7 @@ claude --dangerously-skip-permissions -p "/work-ceo"
 Triggered automatically when `/work-pm` creates a GitHub Release at phase completion:
 
 ```
-gh release create "v0.N.0" → docker-publish.yml builds + pushes ghcr.io/ericmaibach/financial:latest → Watchtower auto-pulls
+gh release create "v0.N.0" → docker-publish.yml builds + pushes ghcr.io/ericmaibach/macroclarity:latest → Watchtower auto-pulls
 ```
 
 No manual steps needed. See `docs/COUNCIL-WORKFLOW.md` for full design, state machine, and implementation details.

@@ -121,9 +121,9 @@ gh issue list --label ready-for-stories --state open
 6. Link each user story as a sub-issue of the parent feature:
    ```bash
    # Get parent issue node ID
-   gh api graphql -f query='{ repository(owner: "EricMaibach", name: "financial") { issue(number: <feature-num>) { id } } }'
+   gh api graphql -f query='{ repository(owner: "EricMaibach", name: "MacroClarity") { issue(number: <feature-num>) { id } } }'
    # Get child issue node ID
-   gh api graphql -f query='{ repository(owner: "EricMaibach", name: "financial") { issue(number: <story-num>) { id } } }'
+   gh api graphql -f query='{ repository(owner: "EricMaibach", name: "MacroClarity") { issue(number: <story-num>) { id } } }'
    # Link as sub-issue
    gh api graphql -f query='mutation { addSubIssue(input: { issueId: "<parent-id>", subIssueId: "<child-id>" }) { issue { id } } }'
    ```
@@ -152,7 +152,7 @@ gh issue list --label feature --state open --json number,title,labels \
 
 1. Check sub-issue status:
    ```bash
-   gh api graphql -f query='{ repository(owner: "EricMaibach", name: "financial") { issue(number: <feature-num>) { subIssues(first: 50) { nodes { number title state } } } } }'
+   gh api graphql -f query='{ repository(owner: "EricMaibach", name: "MacroClarity") { issue(number: <feature-num>) { subIssues(first: 50) { nodes { number title state } } } } }'
    ```
 2. **If any sub-issues are still open:** Skip — pipeline is still active.
 3. **If all sub-issues are closed:**
@@ -193,9 +193,9 @@ If any issues are still open, stop here — the phase is not complete.
 a. Close the milestone:
 ```bash
 # Get the milestone number
-MILESTONE_NUMBER=$(gh api repos/EricMaibach/financial/milestones | jq '.[] | select(.title | contains("<phase name>")) | .number')
+MILESTONE_NUMBER=$(gh api repos/EricMaibach/MacroClarity/milestones | jq '.[] | select(.title | contains("<phase name>")) | .number')
 # Close it
-gh api -X PATCH repos/EricMaibach/financial/milestones/$MILESTONE_NUMBER -f state=closed
+gh api -X PATCH repos/EricMaibach/MacroClarity/milestones/$MILESTONE_NUMBER -f state=closed
 ```
 
 b. Create a GitHub Release:

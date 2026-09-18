@@ -19,7 +19,7 @@ version: '3.8'
 
 services:
   signaltrackers-preview:
-    image: ghcr.io/ericmaibach/financial:preview
+    image: ghcr.io/ericmaibach/macroclarity:preview
     container_name: signaltrackers-preview
     ports:
       - "5016:5000"

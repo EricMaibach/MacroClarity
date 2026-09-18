@@ -21,7 +21,7 @@ version: '3.8'
 
 services:
   signaltrackers:
-    image: ghcr.io/ericmaibach/financial:latest
+    image: ghcr.io/ericmaibach/macroclarity:latest
     container_name: signaltrackers
     ports:
       - "5000:5000"

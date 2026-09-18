@@ -26,7 +26,7 @@ RUN pip install --no-cache-dir --user gunicorn
 FROM python:3.13-slim
 
 # Labels for GitHub Container Registry
-LABEL org.opencontainers.image.source="https://github.com/EricMaibach/financial"
+LABEL org.opencontainers.image.source="https://github.com/EricMaibach/MacroClarity"
 LABEL org.opencontainers.image.description="SignalTrackers Financial Dashboard"
 LABEL org.opencontainers.image.licenses="MIT"
 
