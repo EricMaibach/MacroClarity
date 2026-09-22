@@ -7,15 +7,27 @@ written for that model carries a cost 3x too high.
 
 The token columns that fed `calculate_cost()` are still on the row, so the
 correction is deterministic: recompute from the stored token counts at the
-corrected rates. Scoped strictly to `model = 'claude-opus-4-6'` -- the
-`claude-sonnet-4-6` rows were always priced correctly and must not be touched.
+corrected rates.
+
+Scoping: `_get_pricing()` resolves a model name by exact match *and then by
+prefix*, while `record_usage()` stores the model string verbatim. A row
+written under a dated snapshot ID (`claude-opus-4-6-20260115`) or an alias
+(`claude-opus-4-6-latest`) was therefore charged at the Opus rates while an
+equality filter would never see it. This migration matches on
+`LIKE 'claude-opus-4-6%'`, which is exactly the set of names `_get_pricing`
+routes to the Opus row -- no other `MODEL_PRICING` key shares that prefix, so
+the widening cannot reach a correctly-priced model. `claude-sonnet-4-6` and
+`gpt-5.2` do not match and are left untouched. The prefix contains no LIKE
+wildcards (`%` or `_`), so no ESCAPE clause is needed.
 
 Null guard: the token columns are nullable. A row with *all four* token counts
 NULL has nothing to recompute from, so it falls back to dividing the stored
 cost by 3, which is arithmetically identical given the uniform 3x error. The
-recompute branch derives cost purely from the token columns and is therefore
-idempotent; the /3 fallback is not, and relies on Alembic's version table to
-run exactly once.
+divisor is written `3.0` rather than `3`: SQLite stores losslessly-integral
+NUMERIC values with INTEGER affinity, and integer/integer division truncates,
+so `2 / 3` would silently zero the row. The recompute branch derives cost
+purely from the token columns and is therefore idempotent; the /3.0 fallback
+is not, and relies on Alembic's version table to run exactly once.
 
 Revision ID: i4b5c6d7e8f9
 Revises: h3a4b5c6d7e8
@@ -34,11 +46,19 @@ depends_on = None
 
 
 MODEL = 'claude-opus-4-6'
+# Matches the bare ID plus any dated snapshot or alias suffix, mirroring the
+# prefix fallback in `_get_pricing()`.
+MODEL_PREFIX = MODEL + '%'
 
 # Corrected published rates (USD per 1M tokens)
 CORRECTED = {'input': '5.00', 'output': '25.00', 'cache_read': '0.50', 'cache_creation': '6.25'}
 # The rates that were wrongly applied, used to reverse the backfill
 OVERSTATED = {'input': '15.00', 'output': '75.00', 'cache_read': '1.50', 'cache_creation': '18.75'}
+
+# Applied to the stored cost on rows that have no token data to recompute
+# from. Written in float form on purpose -- see the module docstring.
+UPGRADE_FACTOR = '/ 3.0'
+DOWNGRADE_FACTOR = '* 3.0'
 
 _ALL_TOKENS_NULL = (
     'input_tokens IS NULL AND output_tokens IS NULL '
@@ -60,9 +80,9 @@ def _rescale(rates, fallback_factor):
                      + COALESCE(cache_creation_tokens, 0) * {rates['cache_creation']}
                       ) / 1000000
                END
-         WHERE model = :model
+         WHERE model LIKE :model_prefix
         """
-    ), {'model': MODEL}
+    ), {'model_prefix': MODEL_PREFIX}
 
 
 def _run(rates, fallback_factor):
@@ -75,9 +95,9 @@ def _run(rates, fallback_factor):
 
 def upgrade():
     # Overstated by 3x -> divide the unrecomputable rows by 3
-    _run(CORRECTED, '/ 3')
+    _run(CORRECTED, UPGRADE_FACTOR)
 
 
 def downgrade():
     # Restore the (incorrect) figures this migration replaced
-    _run(OVERSTATED, '* 3')
+    _run(OVERSTATED, DOWNGRADE_FACTOR)

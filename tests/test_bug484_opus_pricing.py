@@ -40,6 +40,10 @@ MIGRATION_PATH = (
 )
 
 OPUS = 'claude-opus-4-6'
+# Dated snapshot / alias forms: priced from the Opus row via the prefix
+# fallback in `_get_pricing`, but invisible to an equality-scoped backfill.
+OPUS_SNAPSHOT = 'claude-opus-4-6-20260115'
+OPUS_ALIAS = 'claude-opus-4-6-latest'
 SONNET = 'claude-sonnet-4-6'
 GPT = 'gpt-5.2'
 
@@ -362,6 +366,29 @@ def seeded_db():
             model=SONNET,
             estimated_cost=Decimal('18.00'),
         ),
+        # Dated snapshot ID -- charged at the Opus rates, so it must be
+        # corrected even though it is not equal to the bare model ID.
+        dict(
+            id=5,
+            input_tokens=1_000_000,
+            output_tokens=1_000_000,
+            cache_read_tokens=None,
+            cache_creation_tokens=None,
+            model=OPUS_SNAPSHOT,
+            estimated_cost=Decimal('90.00'),
+        ),
+        # Alias form, all token columns NULL -> /3.0 fallback, and the stored
+        # cost does NOT divide evenly. Under integer division this row would
+        # be silently zeroed, so it is the guard for the float divisor.
+        dict(
+            id=6,
+            input_tokens=None,
+            output_tokens=None,
+            cache_read_tokens=None,
+            cache_creation_tokens=None,
+            model=OPUS_ALIAS,
+            estimated_cost=Decimal('2.00'),
+        ),
     ]
     with engine.begin() as conn:
         conn.execute(table.insert(), rows)
@@ -384,30 +411,33 @@ def _apply(engine, migration, rates, factor):
 
 def test_backfill_corrects_opus_rows(seeded_db, migration):
     engine, table = seeded_db
-    _apply(engine, migration, migration.CORRECTED, '/ 3')
+    _apply(engine, migration, migration.CORRECTED, migration.UPGRADE_FACTOR)
 
     costs = _costs(engine, table)
     assert costs[1] == Decimal('30.00')  # 1M in @ $5 + 1M out @ $25
     assert costs[2] == Decimal('6.75')  # 1M cache read @ $0.50 + 1M write @ $6.25
     assert costs[3] == Decimal('3.00')  # 9.00 / 3, no tokens to recompute from
+    assert costs[5] == Decimal('30.00')  # dated snapshot ID, recomputed like id=1
+    # 2.00 / 3.0 -- integer division would store 0 here
+    assert costs[6] == Decimal('0.66666667')
 
 
 def test_backfill_leaves_sonnet_rows_alone(seeded_db, migration):
     engine, table = seeded_db
     before = _costs(engine, table)[4]
-    _apply(engine, migration, migration.CORRECTED, '/ 3')
+    _apply(engine, migration, migration.CORRECTED, migration.UPGRADE_FACTOR)
     assert _costs(engine, table)[4] == before == Decimal('18.00')
 
 
 def test_backfill_recompute_branch_is_idempotent(seeded_db, migration):
     """Rows with token data derive cost from tokens, so re-running is safe."""
     engine, table = seeded_db
-    _apply(engine, migration, migration.CORRECTED, '/ 3')
+    _apply(engine, migration, migration.CORRECTED, migration.UPGRADE_FACTOR)
     once = _costs(engine, table)
-    _apply(engine, migration, migration.CORRECTED, '/ 3')
+    _apply(engine, migration, migration.CORRECTED, migration.UPGRADE_FACTOR)
     twice = _costs(engine, table)
 
-    for row_id in (1, 2, 4):
+    for row_id in (1, 2, 4, 5):
         assert once[row_id] == twice[row_id]
 
 
@@ -415,14 +445,57 @@ def test_backfill_downgrade_restores_prior_values(seeded_db, migration):
     engine, table = seeded_db
     before = _costs(engine, table)
 
-    _apply(engine, migration, migration.CORRECTED, '/ 3')
-    _apply(engine, migration, migration.OVERSTATED, '* 3')
+    _apply(engine, migration, migration.CORRECTED, migration.UPGRADE_FACTOR)
+    _apply(engine, migration, migration.OVERSTATED, migration.DOWNGRADE_FACTOR)
 
     assert _costs(engine, table) == before
 
 
-def test_backfill_is_scoped_to_the_opus_model(migration):
-    """The UPDATE must filter on the model column, not rewrite the table."""
-    stmt, params = migration._rescale(migration.CORRECTED, '/ 3')
-    assert params == {'model': OPUS}
-    assert 'WHERE model = :model' in str(stmt)
+def test_backfill_is_scoped_by_model_prefix(migration):
+    """Equality under-scopes: `_get_pricing` prefix-matches, so snapshot and
+    alias IDs were charged at the Opus rates too. The filter must be LIKE."""
+    stmt, params = migration._rescale(migration.CORRECTED, migration.UPGRADE_FACTOR)
+    assert params == {'model_prefix': OPUS + '%'}
+    assert 'WHERE model LIKE :model_prefix' in str(stmt)
+    assert 'WHERE model = :model' not in str(stmt)
+
+
+def test_backfill_prefix_matches_exactly_what_get_pricing_routes_to_opus(metering):
+    """The LIKE prefix is not an approximation of the overcharged set -- it is
+    that set. Any name the prefix matches must resolve to the Opus pricing row,
+    and any correctly-priced model must not match."""
+    opus_pricing = metering.MODEL_PRICING[OPUS]
+    for name in (OPUS, OPUS_SNAPSHOT, OPUS_ALIAS):
+        assert name.startswith(OPUS)
+        assert metering._get_pricing(name) is opus_pricing
+    for name in (SONNET, GPT):
+        assert not name.startswith(OPUS)
+        assert metering._get_pricing(name) is not opus_pricing
+
+
+def test_backfill_corrects_snapshot_and_alias_rows(seeded_db, migration):
+    """The regression QA caught: rows carrying a dated snapshot or alias ID
+    were left 3x inflated by an equality-scoped backfill."""
+    engine, table = seeded_db
+    before = _costs(engine, table)
+    _apply(engine, migration, migration.CORRECTED, migration.UPGRADE_FACTOR)
+    after = _costs(engine, table)
+
+    assert after[5] == before[5] / 3
+    assert after[6] == Decimal('0.66666667')
+    assert after[6] != before[6]
+
+
+def test_backfill_divisor_is_float_form(migration):
+    """`2 / 3` truncates to 0 on SQLite's INTEGER affinity -- the divisor must
+    stay in float form or non-multiples of 3 are silently zeroed."""
+    assert migration.UPGRADE_FACTOR == '/ 3.0'
+    assert migration.DOWNGRADE_FACTOR == '* 3.0'
+
+
+def test_backfill_uses_no_like_wildcards_in_the_prefix(migration):
+    """`_` and `%` are LIKE wildcards. The prefix must contain neither, or it
+    would need an ESCAPE clause to avoid over-matching."""
+    literal = migration.MODEL_PREFIX[:-1]
+    assert migration.MODEL_PREFIX.endswith('%')
+    assert '%' not in literal and '_' not in literal
