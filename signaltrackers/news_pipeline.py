@@ -22,6 +22,11 @@ from urllib.parse import urlparse
 import pytz
 import requests
 
+# The pipeline runs from a scheduled data-collection job with no Flask app
+# context, so it cannot read current_app.config. Importing the resolved value
+# from config.py keeps config.py the single source of truth for model IDs.
+from config import ANTHROPIC_MODEL
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -231,7 +236,7 @@ def _summarize_with_anthropic(system_prompt: str, user_prompt: str, max_tokens: 
             return None
         client = anthropic_lib.Anthropic(api_key=api_key)
         msg = client.messages.create(
-            model='claude-opus-4-6',
+            model=ANTHROPIC_MODEL,
             max_tokens=max_tokens,
             system=system_prompt,
             messages=[{'role': 'user', 'content': user_prompt}],

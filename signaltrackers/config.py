@@ -28,6 +28,12 @@ class Config:
     SYSTEM_ANTHROPIC_KEY = os.environ.get('ANTHROPIC_API_KEY')
     ANTHROPIC_EFFORT = os.environ.get('ANTHROPIC_EFFORT', 'medium').lower()
 
+    # Anthropic model selection. This module is the single source of truth for
+    # model IDs — see the module-level aliases below for code that runs outside
+    # a Flask app context.
+    ANTHROPIC_MODEL = os.environ.get('ANTHROPIC_MODEL', 'claude-opus-4-6')
+    ANTHROPIC_CHATBOT_MODEL = os.environ.get('ANTHROPIC_CHATBOT_MODEL', 'claude-sonnet-4-6')
+
     # Invite-only registration (empty string disables the gate)
     INVITE_CODE = os.environ.get('INVITE_CODE', '')
 
@@ -107,6 +113,17 @@ class TestingConfig(Config):
     """Testing configuration."""
     TESTING = True
     SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
+
+
+# ---------------------------------------------------------------------------
+# Module-level model aliases
+# ---------------------------------------------------------------------------
+# ai_summary.py (scheduled briefings) and news_pipeline.py are not guaranteed to
+# run inside a Flask app context, so they cannot read current_app.config. They
+# import these names instead of redefining the defaults, which keeps config.py
+# the only place a model ID literal appears.
+ANTHROPIC_MODEL = Config.ANTHROPIC_MODEL
+ANTHROPIC_CHATBOT_MODEL = Config.ANTHROPIC_CHATBOT_MODEL
 
 
 config_by_name = {

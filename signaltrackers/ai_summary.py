@@ -55,12 +55,17 @@ except ImportError:
 #
 # Models used:
 #   OpenAI: gpt-5.2
-#   Anthropic: claude-opus-4-6 (Claude Opus 4.6 with 1M context)
+#   Anthropic: set by ANTHROPIC_MODEL (see config.py for the default)
 # =============================================================================
 
 AI_PROVIDER = os.environ.get('AI_PROVIDER', 'openai').lower()
 OPENAI_MODEL = "gpt-5.2"
-ANTHROPIC_MODEL = "claude-opus-4-6"
+
+# This module runs outside a Flask app context (scheduled briefing jobs import
+# it directly), so it cannot read current_app.config. It imports the resolved
+# value from config.py instead of redefining the default, keeping config.py the
+# single source of truth for model IDs.
+from config import ANTHROPIC_MODEL  # noqa: E402
 
 # Anthropic effort levels: low, medium, high, max
 # Higher effort = more reasoning depth, slower, more expensive
