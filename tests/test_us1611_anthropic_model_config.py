@@ -208,11 +208,17 @@ class TestNoStraySourcesOfTruth:
     # pricing data looked up against whatever model ran, not model selectors.
     ALLOWED = {'config.py', 'services/usage_metering.py'}
 
+    # Alembic migrations that repair historical rows must pin the model literally:
+    # they target records already written for one specific model, so reading the
+    # ID from config would let a later ANTHROPIC_MODEL change silently retarget a
+    # backfill at the wrong rows. These are historical data, not model selectors.
+    ALLOWED_PREFIXES = ('migrations/versions/',)
+
     def test_no_model_literal_outside_allowed_files(self):
         offenders = []
         for path in SIGNALTRACKERS_DIR.rglob('*.py'):
             rel = path.relative_to(SIGNALTRACKERS_DIR).as_posix()
-            if rel in self.ALLOWED:
+            if rel in self.ALLOWED or rel.startswith(self.ALLOWED_PREFIXES):
                 continue
             if 'claude-' in path.read_text():
                 offenders.append(rel)
