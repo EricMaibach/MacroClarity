@@ -14,14 +14,19 @@ from models.ai_usage import AIUsageRecord
 logger = logging.getLogger(__name__)
 
 # Token pricing per million tokens (USD)
-# Source: provider pricing pages, updated as needed
+# Source: provider pricing pages, updated as needed.
+#
+# Every value here is a *published* per-model figure and must be copied
+# literally from the provider's pricing page. In particular, do not derive
+# 'cache_read' as a percentage of 'input' -- the ratio is not a rule and
+# varies per model, so a derived value silently misprices the row.
 MODEL_PRICING = {
     # Anthropic models
     'claude-opus-4-6': {
-        'input': Decimal('15.00'),
-        'output': Decimal('75.00'),
-        'cache_read': Decimal('1.50'),
-        'cache_creation': Decimal('18.75'),
+        'input': Decimal('5.00'),
+        'output': Decimal('25.00'),
+        'cache_read': Decimal('0.50'),
+        'cache_creation': Decimal('6.25'),
     },
     'claude-sonnet-4-6': {
         'input': Decimal('3.00'),
