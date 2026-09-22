@@ -36,8 +36,9 @@ SIGNALTRACKERS_DIR = REPO_ROOT / 'signaltrackers'
 
 sys.path.insert(0, str(SIGNALTRACKERS_DIR))
 
-OPUS = 'claude-opus-4-6'
-SONNET = 'claude-sonnet-4-6'
+# Shipped defaults, moved to the current generation by US-16.1.2.
+OPUS = 'claude-fable-5-1'
+SONNET = 'claude-sonnet-5'
 
 
 def load_module(name, relative_path):
@@ -80,10 +81,18 @@ def fresh_process(env=None):
         yield
 
 
-def _fake_anthropic_response(text='summary text'):
-    """A response that ends the tool-calling loop on the first iteration."""
+def _fake_anthropic_response(text='summary text', model=None):
+    """A response that ends the tool-calling loop on the first iteration.
+
+    `model` mirrors the real response field: a server-side fallback can serve
+    the turn on a different model than the one requested, and that is what the
+    usage record must be costed against. Defaults to None so callers that do
+    not care fall back to the requested model.
+    """
     return SimpleNamespace(
         stop_reason='end_turn',
+        stop_details=None,
+        model=model,
         content=[SimpleNamespace(type='text', text=text)],
         usage=SimpleNamespace(
             input_tokens=10,
@@ -103,7 +112,8 @@ class TestAISummaryCallSite:
         with fresh_process(env):
             ai_summary = load_module('ai_summary_under_test', 'ai_summary.py')
             client = MagicMock()
-            client.messages.create.return_value = _fake_anthropic_response()
+            # client.beta.messages — betas/fallbacks are beta-namespace only.
+            client.beta.messages.create.return_value = _fake_anthropic_response()
             with patch.object(ai_summary, 'is_tavily_configured', return_value=False):
                 result = ai_summary._call_anthropic_with_tools(
                     client, 'system', 'user', 1000, '[TEST]'
@@ -111,22 +121,22 @@ class TestAISummaryCallSite:
         return client, result
 
     def test_default_model_reaches_messages_create(self):
-        """With nothing set, the briefing call must still send Opus 4.6."""
+        """With nothing set, the briefing call must send the shipped default."""
         client, _ = self._call()
-        assert client.messages.create.call_args.kwargs['model'] == OPUS
+        assert client.beta.messages.create.call_args.kwargs['model'] == OPUS
 
     def test_configured_model_reaches_messages_create(self):
         client, _ = self._call({'ANTHROPIC_MODEL': 'sentinel-briefing'})
-        assert client.messages.create.call_args.kwargs['model'] == 'sentinel-briefing'
+        assert client.beta.messages.create.call_args.kwargs['model'] == 'sentinel-briefing'
 
     def test_reported_model_matches_model_called(self):
         """The result's 'model' feeds usage metering — it must not drift."""
         client, result = self._call({'ANTHROPIC_MODEL': 'sentinel-briefing'})
-        assert result['model'] == client.messages.create.call_args.kwargs['model']
+        assert result['model'] == client.beta.messages.create.call_args.kwargs['model']
 
     def test_chatbot_var_does_not_leak_into_briefing(self):
         client, _ = self._call({'ANTHROPIC_CHATBOT_MODEL': 'sentinel-chatbot'})
-        assert client.messages.create.call_args.kwargs['model'] == OPUS
+        assert client.beta.messages.create.call_args.kwargs['model'] == OPUS
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +152,28 @@ def _create_calls(tree):
             yield node
 
 
+def _effective_keywords(call):
+    """Keywords the create() call actually sends.
+
+    US-16.1.2 routes the Anthropic call sites through
+    `create(**build_request_params(model=..., ...))`, so the model arrives via
+    the helper rather than directly. Unwrap that one level; the guarantee is
+    unchanged, since build_request_params has no default model.
+    """
+    keywords = []
+    for kw in call.keywords:
+        if (
+            kw.arg is None
+            and isinstance(kw.value, ast.Call)
+            and isinstance(kw.value.func, ast.Name)
+            and kw.value.func.id == 'build_request_params'
+        ):
+            keywords.extend(kw.value.keywords)
+        else:
+            keywords.append(kw)
+    return keywords
+
+
 @pytest.fixture(scope='module')
 def tree():
     return ast.parse((SIGNALTRACKERS_DIR / 'dashboard.py').read_text())
@@ -153,7 +185,7 @@ class TestDashboardCallSites:
         literals = [
             kw.value.value
             for call in _create_calls(tree)
-            for kw in call.keywords
+            for kw in _effective_keywords(call)
             if kw.arg == 'model' and isinstance(kw.value, ast.Constant)
         ]
         assert literals == [], f"hardcoded model IDs at dashboard call sites: {literals}"
@@ -163,7 +195,7 @@ class TestDashboardCallSites:
         missing = [
             call.lineno
             for call in _create_calls(tree)
-            if not any(kw.arg == 'model' for kw in call.keywords)
+            if not any(kw.arg == 'model' for kw in _effective_keywords(call))
         ]
         assert missing == [], f"create() without model= at lines {missing}"
 

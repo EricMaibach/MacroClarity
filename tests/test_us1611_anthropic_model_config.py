@@ -22,8 +22,10 @@ SIGNALTRACKERS_DIR = REPO_ROOT / 'signaltrackers'
 
 sys.path.insert(0, str(SIGNALTRACKERS_DIR))
 
-OPUS = 'claude-opus-4-6'
-SONNET = 'claude-sonnet-4-6'
+# Shipped defaults. US-16.1.2 moved these to the current generation; the
+# assertions below pin whatever config.py ships, not a particular tier.
+OPUS = 'claude-fable-5-1'
+SONNET = 'claude-sonnet-5'
 
 
 def load_module(name, relative_path, env=None):
@@ -154,9 +156,12 @@ class TestNewsPipeline:
             'news_pipeline_under_test', 'news_pipeline.py'
         )
 
+        # client.beta.messages — the server-side-fallback beta parameters
+        # are rejected on the non-beta namespace.
         fake_client = MagicMock()
-        fake_client.messages.create.return_value = MagicMock(
-            content=[MagicMock(text='summary')]
+        fake_client.beta.messages.create.return_value = MagicMock(
+            stop_reason='end_turn',
+            content=[MagicMock(type='text', text='summary')],
         )
         fake_lib = MagicMock()
         fake_lib.Anthropic.return_value = fake_client
@@ -166,7 +171,7 @@ class TestNewsPipeline:
                 patch.object(news_pipeline, 'ANTHROPIC_MODEL', 'sentinel-briefing'):
             news_pipeline._summarize_with_anthropic('system', 'user')
 
-        kwargs = fake_client.messages.create.call_args.kwargs
+        kwargs = fake_client.beta.messages.create.call_args.kwargs
         assert kwargs['model'] == 'sentinel-briefing'
 
     def test_no_model_literal_in_source(self):

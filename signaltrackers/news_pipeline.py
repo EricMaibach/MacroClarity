@@ -26,6 +26,19 @@ import requests
 # context, so it cannot read current_app.config. Importing the resolved value
 # from config.py keeps config.py the single source of truth for model IDs.
 from config import ANTHROPIC_MODEL
+from anthropic_request import (
+    build_request_params,
+    extract_text,
+    refusal_reason,
+    warn_if_truncated,
+)
+
+# Short-output path: 1-2 paragraphs of prose. Thinking is always on and shares
+# max_tokens with the visible answer, so the configured ANTHROPIC_EFFORT (tuned
+# for briefings) would spend most of the budget on reasoning nobody reads.
+# Pinning low effort here keeps the summaries cheap and keeps visible text
+# inside the ceiling.
+_SUMMARY_EFFORT = 'low'
 
 logger = logging.getLogger(__name__)
 
@@ -171,7 +184,7 @@ def _generate_topic_summary(topic: str, articles: list[dict]) -> str | None:
 
     provider = os.environ.get('AI_PROVIDER', 'openai').lower()
     if provider == 'anthropic':
-        return _summarize_with_anthropic(system_prompt, user_prompt, max_tokens=500)
+        return _summarize_with_anthropic(system_prompt, user_prompt, max_tokens=4000)
     else:
         return _summarize_with_openai(system_prompt, user_prompt, max_tokens=500)
 
@@ -228,23 +241,48 @@ def _summarize_with_openai(system_prompt: str, user_prompt: str, max_tokens: int
         return None
 
 
-def _summarize_with_anthropic(system_prompt: str, user_prompt: str, max_tokens: int = 1200) -> str | None:
+def _summarize_with_anthropic(system_prompt: str, user_prompt: str, max_tokens: int = 4000) -> str | None:
+    """Summarize via Anthropic.
+
+    `max_tokens` is a combined reasoning + visible-output ceiling: thinking is
+    always on and is generated against the same budget.
+    """
     try:
         import anthropic as anthropic_lib
         api_key = os.environ.get('ANTHROPIC_API_KEY')
         if not api_key:
             return None
         client = anthropic_lib.Anthropic(api_key=api_key)
-        msg = client.messages.create(
-            model=ANTHROPIC_MODEL,
-            max_tokens=max_tokens,
-            system=system_prompt,
-            messages=[{'role': 'user', 'content': user_prompt}],
+        msg = client.beta.messages.create(
+            **build_request_params(
+                model=ANTHROPIC_MODEL,
+                max_tokens=max_tokens,
+                system=system_prompt,
+                messages=[{'role': 'user', 'content': user_prompt}],
+                effort=_SUMMARY_EFFORT,
+            )
         )
-        content = msg.content[0].text if msg.content else None
-        return content.strip() if content else None
+        refusal = refusal_reason(msg)
+        if refusal:
+            logger.warning('[news_pipeline] Anthropic refused the summary: %s', refusal)
+            return None
+        warn_if_truncated(msg, '[news_pipeline]', max_tokens)
+        # Never index content[0] — with thinking always on the first block is a
+        # thinking block, which has no .text.
+        return extract_text(msg)
     except Exception as exc:
-        logger.warning('[news_pipeline] Anthropic summarization failed: %s', exc)
+        status = getattr(exc, 'status_code', None)
+        if status is not None and 400 <= status < 500:
+            # A 4xx is a broken request, not a transient blip. Folding it into
+            # the generic warning below is how a model migration could silently
+            # stop producing news summaries.
+            logger.error(
+                '[news_pipeline] Anthropic rejected the summarization request '
+                '(HTTP %s) — this is a request-shape bug, not a transient '
+                'failure: %s', status, exc,
+            )
+        else:
+            logger.warning('[news_pipeline] Anthropic summarization failed: %s', exc)
         return None
 
 

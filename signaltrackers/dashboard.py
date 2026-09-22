@@ -3409,6 +3409,8 @@ def api_chatbot():
 
     try:
         if provider == 'anthropic':
+            from anthropic_request import refusal_reason
+
             # Use structured system prompt with cache_control for prompt caching (US-325.7)
             # The system prompt is cached across messages in the same conversation,
             # reducing cost by ~90% on follow-up messages.
@@ -3436,10 +3438,16 @@ def api_chatbot():
 
                 response = client.messages.create(
                     model=model,
-                    max_tokens=4096,
+                    # Combined reasoning + visible-answer ceiling: thinking is
+                    # always on and is generated against this same budget.
+                    max_tokens=16000,
                     system=system_prompt_blocks,
                     messages=messages,
-                    tools=tools
+                    tools=tools,
+                    # Adaptive is the only accepted on-mode on current models;
+                    # budget_tokens returns 400. Left at the default
+                    # display ("omitted") — the chat UI does not show reasoning.
+                    thinking={"type": "adaptive"},
                 )
 
                 # Log cache usage for cost monitoring
@@ -3451,6 +3459,20 @@ def api_chatbot():
                       f"cache_creation: {cache_creation}, cache_read: {cache_read}")
 
                 total_usage = accumulate_usage(total_usage, extract_usage(response, 'anthropic'))
+
+                refusal = refusal_reason(response)
+                if refusal:
+                    # Checked before content is read; stop_details is None for
+                    # every other stop reason.
+                    app.logger.warning('[CHATBOT-ANTHROPIC] Refused: %s', refusal)
+                    ai_response = None
+                    break
+
+                if response.stop_reason == 'max_tokens':
+                    app.logger.warning(
+                        '[CHATBOT-ANTHROPIC] Hit max_tokens — reasoning may have '
+                        'consumed the budget before any visible text.'
+                    )
 
                 tool_use_blocks = [block for block in response.content if block.type == "tool_use"]
                 text_blocks = [block for block in response.content if block.type == "text"]
@@ -3877,13 +3899,37 @@ def api_chatbot_section_opening():
 
     try:
         if provider == 'anthropic':
-            response = client.messages.create(
-                model=model,
-                max_tokens=512,
-                system=system_prompt,
-                messages=[{'role': 'user', 'content': user_message}]
+            from anthropic_request import (
+                build_request_params, extract_text, refusal_reason,
+                served_model, warn_if_truncated,
             )
-            ai_response = response.content[0].text
+            # Short-output path (a single opening paragraph) on the briefing
+            # model. Thinking is always on and shares max_tokens with the
+            # visible answer, so the old 512 ceiling — sized when thinking was
+            # off — would be consumed by reasoning before any text. Low effort
+            # keeps that reasoning short; the raised ceiling keeps it from
+            # truncating the answer.
+            section_max_tokens = 4000
+            response = client.beta.messages.create(
+                **build_request_params(
+                    model=model,
+                    max_tokens=section_max_tokens,
+                    system=system_prompt,
+                    messages=[{'role': 'user', 'content': user_message}],
+                    effort='low',
+                )
+            )
+            refusal = refusal_reason(response)
+            if refusal:
+                # A refusal is not content — never render it to the reader.
+                app.logger.warning('Section opening refused: %s', refusal)
+                return jsonify({'error': 'AI service unavailable'}), 503
+            warn_if_truncated(response, '[SECTION-OPENING]', section_max_tokens)
+            # Never index content[0] — the first block is a thinking block.
+            ai_response = extract_text(response)
+            # A server-side fallback can serve the turn on a different model;
+            # meter what actually ran, not what we asked for.
+            metering_model = served_model(response, model)
         else:  # OpenAI
             response = client.chat.completions.create(
                 model=model,
@@ -3894,6 +3940,7 @@ def api_chatbot_section_opening():
                 max_tokens=512
             )
             ai_response = response.choices[0].message.content
+            metering_model = model
 
         # Record usage metering for authenticated users (US-12.2.2)
         try:
@@ -3903,7 +3950,7 @@ def api_chatbot_section_opening():
                 record_usage(
                     user_id=current_user.id,
                     interaction_type='section_ai',
-                    model_name=model,
+                    model_name=metering_model,
                     **usage_data,
                 )
         except Exception:
@@ -4080,7 +4127,10 @@ Write a single sentence synthesis (max 150 characters)."""
             client=client,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            max_tokens=100,
+            # Combined reasoning + output ceiling: thinking is always on and
+            # shares this budget. The visible answer is one sentence; the rest
+            # is headroom so reasoning cannot truncate it.
+            max_tokens=4000,
             log_prefix="[Market Synthesis]"
         )
 

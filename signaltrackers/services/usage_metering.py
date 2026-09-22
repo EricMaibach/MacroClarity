@@ -22,6 +22,23 @@ logger = logging.getLogger(__name__)
 # varies per model, so a derived value silently misprices the row.
 MODEL_PRICING = {
     # Anthropic models
+    'claude-fable-5-1': {
+        'input': Decimal('10.00'),
+        'output': Decimal('50.00'),
+        # Published at $0.25/MTok -- 2.5% of input, not the 10% every other
+        # model here happens to use. Deriving this from 'input' would overstate
+        # cache-read cost by 4x on the model that reads the most cache.
+        'cache_read': Decimal('0.25'),
+        'cache_creation': Decimal('12.50'),
+    },
+    'claude-sonnet-5': {
+        'input': Decimal('2.00'),
+        'output': Decimal('10.00'),
+        'cache_read': Decimal('0.20'),
+        'cache_creation': Decimal('2.50'),
+    },
+    # Previous generation -- retained so rollback (ANTHROPIC_MODEL=...) and
+    # historical usage records still price correctly.
     'claude-opus-4-6': {
         'input': Decimal('5.00'),
         'output': Decimal('25.00'),
@@ -55,13 +72,20 @@ _PER_MILLION = Decimal('1000000')
 
 
 def _get_pricing(model_name):
-    """Get pricing for a model, falling back to default if unknown."""
-    # Try exact match first, then prefix match
+    """Get pricing for a model, falling back to default if unknown.
+
+    Exact match wins. Otherwise the *longest* matching key prefix wins, which
+    is what makes dated snapshots and aliases ('claude-fable-5-1-20260115',
+    'claude-sonnet-5-latest') price off their base row. Longest-match rather
+    than first-match matters because keys can be prefixes of one another --
+    'claude-fable-5-1'.startswith('claude-fable-5') is True -- and dict order
+    would otherwise decide which row a model got, silently.
+    """
     if model_name in MODEL_PRICING:
         return MODEL_PRICING[model_name]
-    for key in MODEL_PRICING:
-        if model_name.startswith(key):
-            return MODEL_PRICING[key]
+    matches = [key for key in MODEL_PRICING if model_name.startswith(key)]
+    if matches:
+        return MODEL_PRICING[max(matches, key=len)]
     logger.warning(f"Unknown model for pricing: {model_name}, using defaults")
     return _DEFAULT_PRICING
 
