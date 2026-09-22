@@ -19,8 +19,9 @@ class AIServiceError(Exception):
 
 # AI Provider constants
 OPENAI_MODEL = "gpt-5.2"
-ANTHROPIC_MODEL = "claude-opus-4-6"
-ANTHROPIC_CHATBOT_MODEL = "claude-sonnet-4-6"
+
+# Anthropic model IDs are not constants here — they come from app config
+# (config.py), so they can be overridden per-environment without a rebuild.
 
 
 def get_system_ai_client() -> Tuple[Optional[Any], Optional[str]]:
@@ -64,7 +65,7 @@ def get_system_ai_model() -> str:
     """
     provider = current_app.config.get('SYSTEM_AI_PROVIDER', 'openai').lower()
     if provider == 'anthropic':
-        return ANTHROPIC_MODEL
+        return current_app.config['ANTHROPIC_MODEL']
     return OPENAI_MODEL
 
 
@@ -72,13 +73,14 @@ def get_system_chatbot_model() -> str:
     """
     Get the chatbot-specific model for the system's configured provider.
 
-    Chatbot uses Sonnet 4.6 (Anthropic) for cost efficiency with large context,
-    while briefings use Opus 4.6 for maximum analytical depth.
+    The chatbot uses a cheaper model than briefings for cost efficiency with
+    large context, while briefings use the top tier for analytical depth.
+    Both are set by ANTHROPIC_CHATBOT_MODEL / ANTHROPIC_MODEL.
 
     Returns:
         str: Model name
     """
     provider = current_app.config.get('SYSTEM_AI_PROVIDER', 'openai').lower()
     if provider == 'anthropic':
-        return ANTHROPIC_CHATBOT_MODEL
+        return current_app.config['ANTHROPIC_CHATBOT_MODEL']
     return OPENAI_MODEL

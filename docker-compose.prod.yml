@@ -41,6 +41,10 @@ services:
       # Anthropic effort level (low/medium/high/max)
       - ANTHROPIC_EFFORT=${ANTHROPIC_EFFORT:-medium}
 
+      # Anthropic models (briefings/news vs. chatbot — see .env.example for cost notes)
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-opus-4-6}
+      - ANTHROPIC_CHATBOT_MODEL=${ANTHROPIC_CHATBOT_MODEL:-claude-sonnet-4-6}
+
       # Email Configuration (for alerts and briefings)
       - MAIL_SERVER=${MAIL_SERVER:-smtp-relay.brevo.com}
       - MAIL_PORT=${MAIL_PORT:-587}
