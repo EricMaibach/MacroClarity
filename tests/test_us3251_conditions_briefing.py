@@ -14,6 +14,7 @@ Verifies that:
 import json
 import os
 import sys
+import re
 import unittest
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -205,11 +206,18 @@ class TestMaxTokensIncreased(unittest.TestCase):
         cls.src = read_source('ai_summary.py')
 
     def test_max_tokens_sufficient(self):
-        # Find the call_ai_with_tools call in generate_daily_summary context
+        # Find the call_ai_with_tools call in generate_daily_summary context.
+        # Asserted as a floor, not an exact value: US-16.1.2 made max_tokens a
+        # combined reasoning + output ceiling (thinking is always on and is
+        # generated against the same budget), so the number legitimately moves
+        # upward. What must never happen is it dropping below what three
+        # paragraphs need.
         idx = self.src.find('def generate_daily_summary')
         end_idx = self.src.find('\ndef ', idx + 1)
         block = self.src[idx:end_idx]
-        self.assertIn('max_tokens=800', block)
+        match = re.search(r'max_tokens=(\d+)', block)
+        self.assertIsNotNone(match, 'no max_tokens= in generate_daily_summary')
+        self.assertGreaterEqual(int(match.group(1)), 800)
 
 
 # ---------------------------------------------------------------------------

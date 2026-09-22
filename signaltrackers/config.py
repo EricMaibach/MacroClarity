@@ -4,8 +4,36 @@ Flask Application Configuration
 Environment-based configuration for the SignalTrackers dashboard.
 """
 
+import logging
 import os
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+# Valid values for ANTHROPIC_EFFORT. These are output_config.effort levels on
+# the current Anthropic API, not token budgets. 'xhigh' sits between 'high'
+# and 'max'. An unrecognised value would be rejected by the API with a 400, so
+# it is normalised to the default here rather than forwarded.
+ANTHROPIC_EFFORT_LEVELS = ('low', 'medium', 'high', 'xhigh', 'max')
+ANTHROPIC_EFFORT_DEFAULT = 'medium'
+
+
+def normalize_anthropic_effort(value):
+    """Coerce an ANTHROPIC_EFFORT value to a level the API accepts.
+
+    Returns the default level and logs a warning for anything unrecognised,
+    including an empty string. The invalid value is never returned, so it
+    cannot reach the API.
+    """
+    normalized = (value or '').strip().lower()
+    if normalized in ANTHROPIC_EFFORT_LEVELS:
+        return normalized
+    logger.warning(
+        "Unrecognised ANTHROPIC_EFFORT %r; falling back to %r. Valid levels: %s",
+        value, ANTHROPIC_EFFORT_DEFAULT, ', '.join(ANTHROPIC_EFFORT_LEVELS),
+    )
+    return ANTHROPIC_EFFORT_DEFAULT
+
 
 # Base directory
 BASE_DIR = Path(__file__).parent
@@ -26,13 +54,15 @@ class Config:
     SYSTEM_AI_PROVIDER = os.environ.get('AI_PROVIDER', 'openai').lower()
     SYSTEM_OPENAI_KEY = os.environ.get('OPENAI_API_KEY')
     SYSTEM_ANTHROPIC_KEY = os.environ.get('ANTHROPIC_API_KEY')
-    ANTHROPIC_EFFORT = os.environ.get('ANTHROPIC_EFFORT', 'medium').lower()
+    ANTHROPIC_EFFORT = normalize_anthropic_effort(
+        os.environ.get('ANTHROPIC_EFFORT', ANTHROPIC_EFFORT_DEFAULT)
+    )
 
     # Anthropic model selection. This module is the single source of truth for
     # model IDs — see the module-level aliases below for code that runs outside
     # a Flask app context.
-    ANTHROPIC_MODEL = os.environ.get('ANTHROPIC_MODEL', 'claude-opus-4-6')
-    ANTHROPIC_CHATBOT_MODEL = os.environ.get('ANTHROPIC_CHATBOT_MODEL', 'claude-sonnet-4-6')
+    ANTHROPIC_MODEL = os.environ.get('ANTHROPIC_MODEL', 'claude-fable-5-1')
+    ANTHROPIC_CHATBOT_MODEL = os.environ.get('ANTHROPIC_CHATBOT_MODEL', 'claude-sonnet-5')
 
     # Invite-only registration (empty string disables the gate)
     INVITE_CODE = os.environ.get('INVITE_CODE', '')
@@ -116,14 +146,16 @@ class TestingConfig(Config):
 
 
 # ---------------------------------------------------------------------------
-# Module-level model aliases
+# Module-level aliases
 # ---------------------------------------------------------------------------
 # ai_summary.py (scheduled briefings) and news_pipeline.py are not guaranteed to
 # run inside a Flask app context, so they cannot read current_app.config. They
 # import these names instead of redefining the defaults, which keeps config.py
-# the only place a model ID literal appears.
+# the only place a model ID literal appears. ANTHROPIC_EFFORT rides along so
+# those modules get the validated level rather than re-reading the raw env var.
 ANTHROPIC_MODEL = Config.ANTHROPIC_MODEL
 ANTHROPIC_CHATBOT_MODEL = Config.ANTHROPIC_CHATBOT_MODEL
+ANTHROPIC_EFFORT = Config.ANTHROPIC_EFFORT
 
 
 config_by_name = {

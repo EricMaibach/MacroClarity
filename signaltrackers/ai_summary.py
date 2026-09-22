@@ -66,10 +66,19 @@ OPENAI_MODEL = "gpt-5.2"
 # value from config.py instead of redefining the default, keeping config.py the
 # single source of truth for model IDs.
 from config import ANTHROPIC_MODEL  # noqa: E402
+from anthropic_request import (  # noqa: E402
+    build_request_params,
+    extract_text,
+    refusal_reason,
+    served_model,
+    warn_if_truncated,
+)
 
-# Anthropic effort levels: low, medium, high, max
-# Higher effort = more reasoning depth, slower, more expensive
-ANTHROPIC_EFFORT = os.environ.get('ANTHROPIC_EFFORT', 'medium').lower()
+# The request shape (thinking / output_config.effort / refusal fallbacks) lives
+# in anthropic_request.py, which reads the validated ANTHROPIC_EFFORT from
+# config. ANTHROPIC_EFFORT is an effort level (low/medium/high/xhigh/max), not
+# a token budget; an invalid value falls back rather than reaching the API,
+# which would 400.
 
 
 def get_ai_provider():
@@ -135,7 +144,7 @@ def _dump_prompt_to_file(log_prefix, provider, system_prompt, user_prompt, max_t
     print(f"{log_prefix} Prompt dumped to {filename}")
 
 
-def call_ai_with_tools(client, system_prompt, user_prompt, max_tokens=600, log_prefix="[AI]", provider=None):
+def call_ai_with_tools(client, system_prompt, user_prompt, max_tokens=16000, log_prefix="[AI]", provider=None):
     """
     Make an AI API call with web search tool support.
     Supports both OpenAI and Anthropic APIs.
@@ -144,7 +153,13 @@ def call_ai_with_tools(client, system_prompt, user_prompt, max_tokens=600, log_p
         client: AI client instance (OpenAI or Anthropic)
         system_prompt: System prompt for the model
         user_prompt: User prompt with data/context
-        max_tokens: Maximum tokens for completion
+        max_tokens: Ceiling for the whole completion. Thinking is always on
+            and is generated against this same ceiling, so this is a combined
+            reasoning + visible-output budget, not an output length. Sizing it
+            from the visible answer alone truncates the answer with reasoning
+            that has already been generated and billed. Raising the ceiling
+            does not raise cost — you pay for tokens produced, not for the cap.
+            Spend is controlled by ANTHROPIC_EFFORT.
         log_prefix: Prefix for log messages (e.g., "[Crypto Summary]")
         provider: 'openai' or 'anthropic' (auto-detected if None)
 
@@ -301,15 +316,6 @@ def _call_anthropic_with_tools(client, system_prompt, user_prompt, max_tokens, l
     else:
         print(f"{log_prefix} Web search tool not available (Tavily not configured)")
 
-    # Map effort level to thinking budget
-    effort_budgets = {
-        'low': 1024,
-        'medium': 4096,
-        'high': 10000,
-        'max': 32000
-    }
-    thinking_budget = effort_budgets.get(ANTHROPIC_EFFORT, 4096)
-
     # Tool calling loop
     # Allow up to 6 web search iterations for comprehensive market analysis
     # Complex market days often require 4-5 searches for context (breaking news,
@@ -317,36 +323,50 @@ def _call_anthropic_with_tools(client, system_prompt, user_prompt, max_tokens, l
     max_iterations = 6
     iteration = 0
     total_usage = {}
+    # A server-side fallback can serve the turn on a different model than we
+    # asked for. Cost is attributed to whatever actually ran, not to the
+    # requested model. Fallback routing is sticky for the rest of the turn, so
+    # the last response's model is the one that produced the answer.
+    cost_model = ANTHROPIC_MODEL
 
     while iteration < max_iterations:
         iteration += 1
         print(f"{log_prefix} API call iteration {iteration}/{max_iterations}")
 
-        api_params = {
-            "model": ANTHROPIC_MODEL,
-            "max_tokens": max_tokens + thinking_budget,  # Include budget for thinking
-            "system": system_prompt,
-            "messages": messages,
-            "thinking": {
-                "type": "enabled",
-                "budget_tokens": thinking_budget
-            }
-        }
+        api_params = build_request_params(
+            model=ANTHROPIC_MODEL,
+            max_tokens=max_tokens,
+            system=system_prompt,
+            messages=messages,
+            tools=tools,
+        )
 
-        if tools:
-            api_params["tools"] = tools
+        # No try/except here on purpose. This call used to catch every
+        # exception, drop `thinking`, and retry — which turned a malformed
+        # request into a silently thinking-free briefing with no signal beyond
+        # one print. A 400 must fail loudly.
+        response = client.beta.messages.create(**api_params)
 
-        try:
-            response = client.messages.create(**api_params)
-        except Exception as e:
-            # If thinking mode fails, try without it
-            print(f"{log_prefix} Thinking mode failed, retrying without: {e}")
-            del api_params["thinking"]
-            api_params["max_tokens"] = max_tokens
-            response = client.messages.create(**api_params)
-
+        cost_model = served_model(response, ANTHROPIC_MODEL)
         total_usage = accumulate_usage(total_usage, extract_usage_anthropic(response))
-        print(f"{log_prefix} Response stop_reason: {response.stop_reason}")
+        print(f"{log_prefix} Response stop_reason: {response.stop_reason}, "
+              f"served by: {cost_model}")
+
+        # A refusal must be checked before content is read, and must never be
+        # returned to the reader as a briefing. Reaching here means the whole
+        # fallback chain declined.
+        refusal = refusal_reason(response)
+        if refusal:
+            print(f"{log_prefix} Request refused: {refusal}")
+            return {
+                'success': False,
+                'content': None,
+                'error': f'Model refused the request ({refusal})',
+                'usage': total_usage,
+                'model': cost_model,
+            }
+
+        warn_if_truncated(response, log_prefix, max_tokens)
 
         # Check for tool use
         tool_use_blocks = [block for block in response.content if block.type == "tool_use"]
@@ -390,30 +410,29 @@ def _call_anthropic_with_tools(client, system_prompt, user_prompt, max_tokens, l
             continue
 
         # No tool calls - extract text response
-        text_blocks = [block for block in response.content if block.type == "text"]
-        content = " ".join(block.text for block in text_blocks) if text_blocks else None
+        content = extract_text(response)
 
         print(f"{log_prefix} Response content length: {len(content) if content else 0}")
 
         if content:
             print(f"{log_prefix} Response content preview: {content[:200]}...")
 
-        if not content or not content.strip():
+        if not content:
             print(f"{log_prefix} API returned empty content")
             return {
                 'success': False,
                 'content': None,
                 'error': 'API returned empty response',
                 'usage': total_usage,
-                'model': ANTHROPIC_MODEL,
+                'model': cost_model,
             }
 
         return {
             'success': True,
-            'content': content.strip(),
+            'content': content,
             'error': None,
             'usage': total_usage,
-            'model': ANTHROPIC_MODEL,
+            'model': cost_model,
         }
 
     # Exceeded max iterations
@@ -423,7 +442,7 @@ def _call_anthropic_with_tools(client, system_prompt, user_prompt, max_tokens, l
         'content': None,
         'error': 'Exceeded maximum tool call iterations',
         'usage': total_usage,
-        'model': ANTHROPIC_MODEL,
+        'model': cost_model,
     }
 
 
@@ -979,7 +998,7 @@ Remember: 3 paragraphs (what's happening, what's changing, what to do), tell the
             client=client,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            max_tokens=800,
+            max_tokens=16000,
             log_prefix="[AI Summary]"
         )
 
@@ -1201,7 +1220,7 @@ Remember: 3 paragraphs, connect BTC to liquidity conditions, be specific about k
             client=client,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            max_tokens=900,
+            max_tokens=16000,
             log_prefix="[Crypto Summary]"
         )
 
@@ -1414,7 +1433,7 @@ Remember: 3 paragraphs, tell the story of market structure and rotation, explain
             client=client,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            max_tokens=900,
+            max_tokens=16000,
             log_prefix="[Equity Summary]"
         )
 
@@ -1630,7 +1649,7 @@ Remember: 3 paragraphs, tell the rates story clearly, explain curve signals, mak
             client=client,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            max_tokens=900,
+            max_tokens=16000,
             log_prefix="[Rates Summary]"
         )
 
@@ -1846,7 +1865,7 @@ Remember: 3 paragraphs, tell the dollar story clearly, explain the Dollar Smile 
             client=client,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            max_tokens=900,
+            max_tokens=16000,
             log_prefix="[Dollar Summary]"
         )
 
@@ -2053,7 +2072,7 @@ Remember: 3 paragraphs, tell the credit story clearly, explain what spread level
             client=client,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            max_tokens=900,
+            max_tokens=16000,
             log_prefix="[Credit Summary]"
         )
 
@@ -2367,7 +2386,7 @@ Remember: Analyze their allocation against current market conditions, be specifi
             client=client,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            max_tokens=1000,
+            max_tokens=16000,
             log_prefix="[Portfolio Summary]"
         )
 
