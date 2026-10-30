@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 """
-Daily macro news pipeline.
+Macro news pipeline.
 
-Fetches news across six market topic areas via Tavily, stores full article
-content keyed by date, and generates a single cross-market AI summary.
+Two halves on two cadences (US-490.1):
+
+- **Daily (no AI):** fetch news across six market topic areas via Tavily and
+  store the full article content keyed by ET date.
+- **Weekly (AI):** after Friday's close, summarize the whole week's stored
+  articles into one cross-market summary plus per-topic summaries, and store
+  that as a weekly review.
 
 Usage:
-    from news_pipeline import run_news_pipeline, get_stored_news
+    from news_pipeline import run_news_pipeline, summarize_week_news, get_stored_news
 
-    run_news_pipeline()          # fetch + store + summarize
-    data = get_stored_news()     # read stored data for today (or recent)
+    run_news_pipeline()                       # daily: fetch + store, no AI
+    summarize_week_news(week_start, through)  # weekly: summarize + store
+    data = get_stored_news()                  # latest weekly summary + its sources
 """
 
 import json
@@ -22,6 +28,8 @@ from urllib.parse import urlparse
 import pytz
 import requests
 
+import briefing_week
+
 # The pipeline runs from a scheduled data-collection job with no Flask app
 # context, so it cannot read current_app.config. Importing the resolved value
 # from config.py keeps config.py the single source of truth for model IDs.
@@ -30,6 +38,7 @@ from anthropic_request import (
     build_request_params,
     extract_text,
     refusal_reason,
+    served_model,
     warn_if_truncated,
 )
 
@@ -47,6 +56,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 DATA_DIR = Path(__file__).parent / 'data'
 NEWS_CACHE_FILE = DATA_DIR / 'news_data.json'
+NEWS_REVIEWS_FILE = DATA_DIR / 'news_reviews.json'
 
 RETENTION_DAYS = 90
 
@@ -63,6 +73,11 @@ TOPIC_QUERIES = [
 ]
 
 TAVILY_API_URL = 'https://api.tavily.com/search'
+
+# Weekly prompt caps. A week holds ~5x the articles a day did, so the old
+# daily caps (40 cross-market, 10 per topic) would cover barely two days.
+MAX_WEEKLY_ARTICLES = 60
+MAX_WEEKLY_TOPIC_ARTICLES = 20
 
 # ---------------------------------------------------------------------------
 # Fetch helpers
@@ -116,7 +131,7 @@ def _generate_cross_market_summary(articles: list[dict]) -> str | None:
     """
     # Build article digest for the prompt (cap per-article length to save tokens)
     digest_parts = []
-    for art in articles[:40]:  # max 40 articles
+    for art in articles[:MAX_WEEKLY_ARTICLES]:
         content_snippet = (art['raw_content'] or '')[:600]
         digest_parts.append(
             f"[{art['topic'].upper()}] {art['headline']}\n"
@@ -126,17 +141,17 @@ def _generate_cross_market_summary(articles: list[dict]) -> str | None:
     digest = '\n\n---\n\n'.join(digest_parts)
 
     system_prompt = (
-        "You are a senior macro analyst writing a daily market briefing. "
+        "You are a senior macro analyst writing a weekly market briefing. "
         "Write for a financially literate non-professional — someone who reads the WSJ and owns ETFs but doesn't work in finance. "
         "Use financial terms freely, but always make the implication clear in plain language. Avoid z-scores, basis point counts, and percentile references — translate these into plain-language magnitude (e.g., 'near historic highs,' 'the largest move in months'). "
-        "Write a comprehensive cross-market summary of today's news in 3-5 prose paragraphs. "
+        "Write a comprehensive cross-market summary of this week's news in 3-5 prose paragraphs. "
         "Do NOT use bullet points or headers. Write in flowing, analytical prose. "
         "Cover the major themes across macro, equities, rates, credit, crypto, and currencies. "
         "Focus on what matters most and how the pieces connect. Be direct and authoritative."
     )
     user_prompt = (
-        f"Today's date: {date.today().isoformat()}\n\n"
-        f"Here are today's key articles across all market areas:\n\n{digest}\n\n"
+        f"Today's date: {_today()}\n\n"
+        f"Here are this week's key articles across all market areas:\n\n{digest}\n\n"
         "Write your cross-market summary now."
     )
 
@@ -158,7 +173,7 @@ def _generate_topic_summary(topic: str, articles: list[dict]) -> str | None:
         return None
 
     digest_parts = []
-    for art in articles[:10]:
+    for art in articles[:MAX_WEEKLY_TOPIC_ARTICLES]:
         content_snippet = (art['raw_content'] or '')[:600]
         digest_parts.append(
             f"{art['headline']}\n"
@@ -172,13 +187,13 @@ def _generate_topic_summary(topic: str, articles: list[dict]) -> str | None:
         f"You are a senior {topic_label.lower()} market analyst writing a brief news summary. "
         "Write for a financially literate non-professional — someone who reads the WSJ and owns ETFs but doesn't work in finance. "
         "Use financial terms freely, but always make the implication clear in plain language. Avoid z-scores, basis point counts, and percentile references — translate these into plain-language magnitude (e.g., 'near historic highs,' 'the largest move in months'). "
-        f"Summarize today's {topic_label.lower()} news in 1-2 concise paragraphs of flowing prose. "
+        f"Summarize this week's {topic_label.lower()} news in 1-2 concise paragraphs of flowing prose. "
         "Do NOT use bullet points, headers, or lists. Focus on the most significant developments, "
         "key numbers, and market implications. Be direct and authoritative."
     )
     user_prompt = (
-        f"Today's date: {date.today().isoformat()}\n\n"
-        f"Here are today's {topic_label.lower()} articles:\n\n{digest}\n\n"
+        f"Today's date: {_today()}\n\n"
+        f"Here are this week's {topic_label.lower()} articles:\n\n{digest}\n\n"
         f"Write your {topic_label.lower()} news summary now."
     )
 
@@ -218,6 +233,16 @@ def _generate_all_topic_summaries(all_articles: list[dict]) -> dict[str, str]:
     return topic_summaries
 
 
+def _meter(response, provider: str, model: str) -> None:
+    """Meter a summarization call. Only records inside the scheduled weekly run."""
+    try:
+        from services.usage_metering import extract_usage
+        usage = extract_usage(response, provider)
+    except Exception:
+        usage = {}
+    briefing_week.meter_ai_call(usage, model)
+
+
 def _summarize_with_openai(system_prompt: str, user_prompt: str, max_tokens: int = 1200) -> str | None:
     try:
         from openai import OpenAI
@@ -234,6 +259,7 @@ def _summarize_with_openai(system_prompt: str, user_prompt: str, max_tokens: int
             max_completion_tokens=max_tokens,
             temperature=0.6,
         )
+        _meter(resp, 'openai', 'gpt-5.2')
         content = resp.choices[0].message.content
         return content.strip() if content else None
     except Exception as exc:
@@ -262,6 +288,7 @@ def _summarize_with_anthropic(system_prompt: str, user_prompt: str, max_tokens: 
                 effort=_SUMMARY_EFFORT,
             )
         )
+        _meter(msg, 'anthropic', served_model(msg, ANTHROPIC_MODEL))
         refusal = refusal_reason(msg)
         if refusal:
             logger.warning('[news_pipeline] Anthropic refused the summary: %s', refusal)
@@ -290,14 +317,24 @@ def _summarize_with_anthropic(system_prompt: str, user_prompt: str, max_tokens: 
 # Storage helpers
 # ---------------------------------------------------------------------------
 
-def _load_cache() -> dict:
-    if not NEWS_CACHE_FILE.exists():
-        return {}
+def _today() -> str:
+    """Today's date in ET. Week ranges are ET, so day keys must be too; the
+    container clock is UTC and would file an evening fetch under tomorrow."""
+    return briefing_week.now_et().date().isoformat()
+
+
+def _load_json(path: Path, default):
+    if not path.exists():
+        return default
     try:
-        with open(NEWS_CACHE_FILE) as f:
+        with open(path) as f:
             return json.load(f)
     except Exception:
-        return {}
+        return default
+
+
+def _load_cache() -> dict:
+    return _load_json(NEWS_CACHE_FILE, {})
 
 
 def _save_cache(data: dict) -> None:
@@ -306,10 +343,50 @@ def _save_cache(data: dict) -> None:
         json.dump(data, f, indent=2)
 
 
+def _load_reviews() -> dict:
+    data = _load_json(NEWS_REVIEWS_FILE, {'reviews': []})
+    return data if isinstance(data.get('reviews'), list) else {'reviews': []}
+
+
+def _save_reviews(data: dict) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with open(NEWS_REVIEWS_FILE, 'w') as f:
+        json.dump(data, f, indent=2)
+
+
 def _prune(data: dict) -> dict:
     """Remove entries older than RETENTION_DAYS."""
-    cutoff = (date.today() - timedelta(days=RETENTION_DAYS)).isoformat()
+    cutoff = (date.fromisoformat(_today()) - timedelta(days=RETENTION_DAYS)).isoformat()
     return {k: v for k, v in data.items() if k >= cutoff}
+
+
+def _week_articles(cache: dict, week_start: str, through: str) -> list[dict]:
+    """Every article stored from `week_start` to `through`, de-duplicated.
+
+    Tavily often returns the same story on consecutive days; without
+    de-duplication one story could appear five times and crowd out the rest of
+    the week. A story is kept on the day it first appeared. The result is
+    interleaved across days, newest day first, so the per-prompt article caps
+    sample the whole week instead of filling up with Monday.
+    """
+    seen = set()
+    per_day = []
+    for day in sorted(k for k in cache if week_start <= k <= through):
+        kept = []
+        for art in cache[day].get('articles') or []:
+            key = art.get('url') or art.get('headline')
+            if key and key in seen:
+                continue
+            if key:
+                seen.add(key)
+            kept.append(art)
+        per_day.append(kept)
+
+    interleaved = []
+    per_day.reverse()
+    for i in range(max((len(d) for d in per_day), default=0)):
+        interleaved.extend(d[i] for d in per_day if i < len(d))
+    return interleaved
 
 
 # ---------------------------------------------------------------------------
@@ -318,20 +395,20 @@ def _prune(data: dict) -> dict:
 
 def run_news_pipeline() -> bool:
     """
-    Fetch daily macro news, store articles, and generate a cross-market summary.
+    Daily: fetch macro news across all topics and store the articles.
 
-    Returns True on success, False if Tavily is unavailable.
-    Failures in individual topic fetches or summarization are non-fatal.
+    Makes **no AI calls**. Summarization runs weekly, in `summarize_week_news`.
+    Returns True on success, False if Tavily is unavailable. Failures in
+    individual topic fetches are non-fatal.
     """
     api_key = os.environ.get('TAVILY_API_KEY')
     if not api_key:
         logger.info('[news_pipeline] TAVILY_API_KEY not set — skipping news pipeline')
         return False
 
-    today = date.today().isoformat()
-    logger.info('[news_pipeline] Starting news pipeline for %s', today)
+    today = _today()
+    logger.info('[news_pipeline] Starting news fetch for %s', today)
 
-    # Fetch all topic areas
     all_articles = []
     for topic, query in TOPIC_QUERIES:
         logger.info('[news_pipeline] Fetching topic: %s', topic)
@@ -341,72 +418,109 @@ def run_news_pipeline() -> bool:
 
     logger.info('[news_pipeline] Total articles fetched: %d', len(all_articles))
 
-    # Generate cross-market AI summary
-    logger.info('[news_pipeline] Generating cross-market summary...')
-    summary = _generate_cross_market_summary(all_articles) if all_articles else None
-    if summary:
-        logger.info('[news_pipeline] Summary generated (%d chars)', len(summary))
-    else:
-        logger.warning('[news_pipeline] Summary generation failed or returned empty')
-
-    # Generate per-topic AI summaries for market-specific briefings
-    logger.info('[news_pipeline] Generating per-topic summaries...')
-    topic_summaries = _generate_all_topic_summaries(all_articles) if all_articles else {}
-    logger.info('[news_pipeline] Generated %d topic summaries', len(topic_summaries))
-
-    # Build record
     eastern = pytz.timezone('US/Eastern')
     record = {
         'date': today,
         'fetched_at': datetime.now(eastern).isoformat(),
         'articles': all_articles,
-        'summary': summary,
-        'topic_summaries': topic_summaries,
     }
 
-    # Load, update, prune, save
     cache = _load_cache()
     cache[today] = record
     cache = _prune(cache)
     _save_cache(cache)
 
-    logger.info('[news_pipeline] News pipeline complete for %s', today)
+    logger.info('[news_pipeline] News fetch complete for %s', today)
     return True
 
 
-def get_stored_news(max_stale_days: int = 7) -> dict | None:
+def summarize_week_news(week_start: date, through: date) -> bool:
     """
-    Return stored news data.
+    Weekly: summarize every article stored from `week_start` to `through`.
 
-    Checks today's record first. If absent, returns the most recent record
-    within max_stale_days. Returns None if no suitable record exists or if
-    the storage file is missing/malformed.
+    Produces the cross-market summary and the per-topic summaries the section
+    briefings read, and stores them as one weekly review. Returns True if a
+    review was stored.
+    """
+    articles = _week_articles(_load_cache(), week_start.isoformat(), through.isoformat())
+    logger.info('[news_pipeline] Summarizing %d articles for %s to %s',
+                len(articles), week_start, through)
+    if not articles:
+        logger.warning('[news_pipeline] No stored articles for the week — skipping summary')
+        return False
 
-    Args:
-        max_stale_days: How many days old the most recent record may be.
+    summary = _generate_cross_market_summary(articles)
+    if summary:
+        logger.info('[news_pipeline] Summary generated (%d chars)', len(summary))
+    else:
+        logger.warning('[news_pipeline] Summary generation failed or returned empty')
+
+    topic_summaries = _generate_all_topic_summaries(articles)
+    logger.info('[news_pipeline] Generated %d topic summaries', len(topic_summaries))
+
+    if not summary and not topic_summaries:
+        return False
+
+    metadata = briefing_week.record_metadata()
+    today = _today()
+    review = {
+        'date': today,
+        'fetched_at': metadata['published_at'],
+        # Sources only: the raw article text already lives in the daily records.
+        'articles': [
+            {k: art.get(k) for k in ('headline', 'url', 'source', 'timestamp', 'topic')}
+            for art in articles
+        ],
+        'summary': summary,
+        'topic_summaries': topic_summaries,
+        **metadata,
+    }
+
+    data = _load_reviews()
+    reviews = [r for r in data['reviews'] if r.get('date') != today]
+    reviews.append(review)
+    cutoff = (date.fromisoformat(today) - timedelta(days=RETENTION_DAYS)).isoformat()
+    data['reviews'] = sorted(
+        (r for r in reviews if r.get('date', '') >= cutoff), key=lambda r: r['date'])
+    _save_reviews(data)
+    return True
+
+
+def get_stored_news(max_stale_days: int = 14) -> dict | None:
+    """
+    Return the news record to display and to feed into briefings.
+
+    The weekly review is the record that carries summaries. Daily records hold
+    articles only, so "today's record first" would let Wednesday's summary-less
+    fetch mask last Friday's review. Lookup order:
+
+    1. the most recent record with a summary within `max_stale_days`: a weekly
+       review, or a daily record written before US-490.1 (those carry their own
+       summaries). On the same date the weekly review wins;
+    2. otherwise the most recent daily record (articles, no summary).
+
+    The window defaults to two weeks so one missed Friday run still shows the
+    previous review rather than nothing.
 
     Returns:
-        dict with keys 'date', 'fetched_at', 'articles', 'summary', or None.
+        dict with keys 'date', 'fetched_at', 'articles', 'summary',
+        'topic_summaries' (and week fields on weekly reviews), or None.
     """
     try:
         cache = _load_cache()
+        reviews = _load_reviews()['reviews']
     except Exception:
         return None
 
-    if not cache:
+    cutoff = (date.fromisoformat(_today()) - timedelta(days=max_stale_days)).isoformat()
+
+    summarized = [(r.get('date', ''), 1, r) for r in reviews if r.get('summary')]
+    summarized += [(k, 0, v) for k, v in cache.items() if v.get('summary')]
+    summarized = [c for c in summarized if c[0] >= cutoff]
+    if summarized:
+        return max(summarized, key=lambda c: (c[0], c[1]))[2]
+
+    recent = [k for k in cache if k >= cutoff]
+    if not recent:
         return None
-
-    today = date.today().isoformat()
-
-    # Prefer today's record
-    if today in cache:
-        return cache[today]
-
-    # Fall back to most recent within stale window
-    cutoff = (date.today() - timedelta(days=max_stale_days)).isoformat()
-    candidates = {k: v for k, v in cache.items() if k >= cutoff}
-    if not candidates:
-        return None
-
-    most_recent_key = max(candidates.keys())
-    return candidates[most_recent_key]
+    return cache[max(recent)]
