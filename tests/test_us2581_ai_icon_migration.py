@@ -159,7 +159,7 @@ class TestAIProvenanceBadge:
         assert '<svg' in badge_section.group(1)
 
     def test_provenance_badge_ai_generated_text(self, index_html):
-        assert 'AI-generated based on current market data' in index_html
+        assert "AI-generated from this week's market data" in index_html
 
     def test_provenance_badge_sparkle_indigo(self, index_html):
         badge_section = re.search(r'id="briefing-attribution"[^>]*>(.+?)</small>', index_html, re.DOTALL)

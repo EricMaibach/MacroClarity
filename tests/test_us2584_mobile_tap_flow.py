@@ -178,8 +178,8 @@ class TestSentenceWrapping:
         assert 'MutationObserver' in mobile_js
 
     def test_handles_paragraph_elements(self, mobile_js):
-        """Wraps sentences inside <p> elements."""
-        assert "querySelectorAll('p')" in mobile_js or 'querySelectorAll("p")' in mobile_js
+        """Wraps sentences inside <p> elements (and <li>s, US-490.3)."""
+        assert "TEXT_BLOCK_SELECTOR = 'p, li" in mobile_js
 
     def test_wraps_paragraph_element(self, mobile_js):
         """wrapParagraph function exists."""

@@ -61,14 +61,191 @@
 
 .conditions-briefing__footer {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.125rem;
     margin-top: 0.75rem;
+}
+
+/* ── Week in Review (US-490.3) ─────────────────────────────── */
+
+/* Header: <768px the week label drops to its own line under the title,
+   keeping the AI button on the title row. */
+.conditions-briefing__header {
+    flex-wrap: wrap;
+    row-gap: 0.25rem;
+}
+.conditions-briefing__header .ai-section-btn {
+    order: 2;
+}
+.conditions-briefing__header .briefing-week-label {
+    order: 3;
+    flex-basis: 100%;
+    margin-left: 0;
+}
+
+/* Week label (spec §1) */
+.briefing-week-label {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #697386;
+}
+.briefing-week-label[hidden] {
+    display: none;
+}
+
+/* Headline (spec §3): sans lead sentence, never a heading */
+.conditions-briefing__narrative .briefing-headline {
+    font-family: var(--font-interface);
+    font-size: 1.125rem;
+    font-weight: 600;
+    line-height: 1.4;
+    color: var(--on-surface);
+    margin-bottom: 1rem; /* --space-4 */
+}
+
+/* Part labels (spec §4): sentence case in the DOM, uppercase via CSS */
+.briefing-part__label {
+    font-family: var(--font-interface);
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: #697386;
+    margin: 0 0 0.5rem; /* --space-2 */
+}
+.briefing-part + .briefing-part,
+.briefing-review__main + .briefing-review__rail {
+    margin-top: 1.5rem; /* --space-5 */
+}
+
+/* What changed (spec §5) */
+.briefing-changed {
+    margin: 0;
+    padding-left: 1.25rem;
+}
+.briefing-changed li {
+    font-size: 1rem;
+    line-height: 1.6;
+    color: #334155;
+}
+.briefing-changed li + li {
+    margin-top: 0.5rem;
+}
+.briefing-changed li::marker {
+    color: #9AA5B1;
+}
+
+/* Watch list (spec §7). Mobile: a divider separates it from Why it matters. */
+.briefing-review__main + .briefing-review__rail {
+    border-top: 1px solid #E8ECEF;
+    padding-top: 1.5rem; /* --space-5 */
+}
+.briefing-watch {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+.briefing-watch__item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+}
+.briefing-watch__item + .briefing-watch__item {
+    margin-top: 12px;
+}
+.briefing-watch__day {
+    flex: 0 0 44px;
+    min-height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: #DBEAFE;
+    color: #1E40AF;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    border-radius: 6px;
+}
+.briefing-watch__text {
+    min-width: 0;
+}
+.briefing-watch__event {
+    display: block;
+    font-size: 0.9375rem;
+    font-weight: 600;
+    line-height: 1.4;
+    color: #1A202C;
+}
+.briefing-watch__reason {
+    display: block;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    color: #4A5568;
+}
+
+/* Stale notice (spec §2): only when published more than 8 days ago */
+.briefing-stale-notice {
+    margin-top: 0.75rem;
+    padding: 8px 12px;
+    border-radius: 6px;
+    background: #FEF3C7;
+    color: #92400E;
+    font-size: 0.875rem;
+}
+.briefing-stale-notice[hidden] {
+    display: none;
+}
+
+@media (min-width: 768px) {
+    .conditions-briefing__footer {
+        flex-direction: row;
+        justify-content: space-between;
+        align-items: center;
+        gap: 1rem;
+    }
+    .conditions-briefing__footer #briefing-timestamp {
+        text-align: right;
+    }
+
+    /* Week label joins the header row, before the AI button, and wraps
+       instead of pushing the button off the row. */
+    .conditions-briefing__header {
+        flex-wrap: nowrap;
+    }
+    .conditions-briefing__header .briefing-week-label {
+        order: 1;
+        flex: 0 1 auto;
+        min-width: 0;
+        margin-left: auto;
+        text-align: right;
+    }
+    .conditions-briefing__header .section-title {
+        order: 0;
+    }
+
+    .conditions-briefing__narrative .briefing-headline {
+        font-size: 1.25rem;
+    }
 }
 
 @media (min-width: 1024px) {
     .conditions-briefing__card {
         padding: 1.5rem;
+    }
+
+    /* Two columns (~62/38): changes and impact left, watch rail right */
+    .briefing-review--with-rail {
+        display: grid;
+        grid-template-columns: minmax(0, 62fr) minmax(0, 38fr);
+        column-gap: 1.5rem; /* --space-5 */
+    }
+    .briefing-review--with-rail .briefing-review__rail {
+        margin-top: 0;
+        border-top: 0;
+        padding-top: 0;
+        border-left: 1px solid #E8ECEF;
+        padding-left: 1.5rem; /* --space-5 */
     }
 }
 
