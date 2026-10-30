@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """
-AI Daily Summary Generator
+AI Week-in-Review Generator
 
-Generates insightful daily market summaries using AI with web search capability.
-Supports both OpenAI and Anthropic APIs, configurable via environment variables.
-Summaries are stored historically and provide context for continuity.
+Generates the weekly market reviews (the general review and five section
+reviews) using AI with web search capability. Each review is written in the
+week-in-review content contract (see weekly_review.py) and stored as raw
+markdown plus its parsed parts. Supports both OpenAI and Anthropic APIs,
+configurable via environment variables. Reviews are stored historically and
+provide context for continuity.
 """
 
 import os
 import json
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 import pytz
 
@@ -29,6 +32,7 @@ except ImportError:
     anthropic = None
 
 import briefing_week
+import weekly_review
 
 from web_search import (
     search_web, search_financial_news, is_tavily_configured,
@@ -146,7 +150,8 @@ def _dump_prompt_to_file(log_prefix, provider, system_prompt, user_prompt, max_t
     print(f"{log_prefix} Prompt dumped to {filename}")
 
 
-def call_ai_with_tools(client, system_prompt, user_prompt, max_tokens=16000, log_prefix="[AI]", provider=None):
+def call_ai_with_tools(client, system_prompt, user_prompt, max_tokens=16000, log_prefix="[AI]", provider=None,
+                       effort=None):
     """
     Make an AI API call with web search tool support.
     Supports both OpenAI and Anthropic APIs.
@@ -164,9 +169,13 @@ def call_ai_with_tools(client, system_prompt, user_prompt, max_tokens=16000, log
             Spend is controlled by ANTHROPIC_EFFORT.
         log_prefix: Prefix for log messages (e.g., "[Crypto Summary]")
         provider: 'openai' or 'anthropic' (auto-detected if None)
+        effort: Anthropic `output_config.effort` override; None uses
+            ANTHROPIC_EFFORT. Ignored by OpenAI.
 
     Returns:
-        dict with 'success', 'content', and 'error' keys
+        dict with 'success', 'content', 'error', 'usage', 'model' and
+        'truncated' keys. 'truncated' is True when the final response stopped
+        at max_tokens, so the content may be cut off mid-part.
     """
     # Auto-detect provider if not specified
     if provider is None:
@@ -178,7 +187,7 @@ def call_ai_with_tools(client, system_prompt, user_prompt, max_tokens=16000, log
     _dump_prompt_to_file(log_prefix, provider, system_prompt, user_prompt, max_tokens)
 
     if provider == 'anthropic':
-        result = _call_anthropic_with_tools(client, system_prompt, user_prompt, max_tokens, log_prefix)
+        result = _call_anthropic_with_tools(client, system_prompt, user_prompt, max_tokens, log_prefix, effort)
     else:
         result = _call_openai_with_tools(client, system_prompt, user_prompt, max_tokens, log_prefix)
 
@@ -231,7 +240,8 @@ def _call_openai_with_tools(client, system_prompt, user_prompt, max_tokens, log_
 
         if tools:
             api_params["tools"] = tools
-            api_params["tool_choice"] = tool_choice
+            # Last turn: no more searches, so the loop always ends with an answer
+            api_params["tool_choice"] = "none" if iteration == max_iterations else tool_choice
 
         response = client.chat.completions.create(**api_params)
         total_usage = accumulate_usage(total_usage, extract_usage_openai(response))
@@ -288,6 +298,7 @@ def _call_openai_with_tools(client, system_prompt, user_prompt, max_tokens, log_
             'error': None,
             'usage': total_usage,
             'model': OPENAI_MODEL,
+            'truncated': response.choices[0].finish_reason == 'length',
         }
 
     # Exceeded max iterations
@@ -301,7 +312,7 @@ def _call_openai_with_tools(client, system_prompt, user_prompt, max_tokens, log_
     }
 
 
-def _call_anthropic_with_tools(client, system_prompt, user_prompt, max_tokens, log_prefix):
+def _call_anthropic_with_tools(client, system_prompt, user_prompt, max_tokens, log_prefix, effort=None):
     """Anthropic-specific implementation of AI call with tools."""
     from services.usage_metering import extract_usage_anthropic, accumulate_usage
 
@@ -347,6 +358,14 @@ def _call_anthropic_with_tools(client, system_prompt, user_prompt, max_tokens, l
             system=system_prompt,
             messages=messages,
             tools=tools,
+            effort=effort,
+            # Last turn: no more searches, so the loop always ends with an answer.
+            # The weekly review's calendar lookups made 6 search turns reachable.
+            tool_choice={"type": "none"} if iteration == max_iterations else None,
+            # Each turn re-sends every earlier search result; cache the prefix.
+            # A real weekly run without this cost ~$1 per call, nearly all of
+            # it re-sent input.
+            cache=True,
         )
 
         # No try/except here on purpose. This call used to catch every
@@ -374,7 +393,7 @@ def _call_anthropic_with_tools(client, system_prompt, user_prompt, max_tokens, l
                 'model': cost_model,
             }
 
-        warn_if_truncated(response, log_prefix, max_tokens)
+        truncated = warn_if_truncated(response, log_prefix, max_tokens)
 
         # Check for tool use
         tool_use_blocks = [block for block in response.content if block.type == "tool_use"]
@@ -441,6 +460,7 @@ def _call_anthropic_with_tools(client, system_prompt, user_prompt, max_tokens, l
             'error': None,
             'usage': total_usage,
             'model': cost_model,
+            'truncated': truncated,
         }
 
     # Exceeded max iterations
@@ -472,6 +492,28 @@ def load_summaries():
         except (json.JSONDecodeError, IOError):
             return {"summaries": []}
     return {"summaries": []}
+
+
+def _format_fields(structured):
+    """Review-format fields stored on a briefing record (US-490.2).
+
+    `structured` holds the parsed week-in-review parts, or None when parsing
+    failed (or the text is a rule-based fallback). The raw markdown is always
+    stored as `summary` either way, so the briefing can always be displayed.
+    """
+    return {
+        'structured': structured,
+        'format': 'structured' if structured else 'markdown',
+    }
+
+
+def _display_parts(record):
+    """Structured parts for a display API. Pre-US-490.2 records return None."""
+    structured = record.get('structured')
+    return {
+        'structured': structured if isinstance(structured, dict) else None,
+        'format': 'structured' if isinstance(structured, dict) else 'markdown',
+    }
 
 
 def save_summaries(data):
@@ -512,7 +554,7 @@ def get_recent_summaries(days=3):
     return _get_recent_summaries(load_summaries(), days)
 
 
-def save_summary(date_str, summary_text, web_search_used=False, news_context=None):
+def save_summary(date_str, summary_text, web_search_used=False, news_context=None, structured=None):
     """Save a new summary, overwriting if same date exists."""
     data = load_summaries()
 
@@ -528,6 +570,7 @@ def save_summary(date_str, summary_text, web_search_used=False, news_context=Non
         "web_search_used": web_search_used,
         "news_context": news_context[:500] if news_context else None,  # Store snippet of news used
         **briefing_week.record_metadata(),
+        **_format_fields(structured),
     })
 
     # Keep last 90 days of summaries
@@ -541,7 +584,7 @@ def _get_stored_news_context(topic: str | None = None) -> str | None:
     """
     Read news context from the stored news pipeline data.
 
-    If topic is None, returns the cross-market summary string (for daily briefing).
+    If topic is None, returns the cross-market summary string (for the general review).
     If topic is given (e.g. 'crypto'), returns the pre-built AI topic summary.
     Returns None if no stored data is available or the topic has no content.
     """
@@ -562,7 +605,7 @@ def _get_stored_news_context(topic: str | None = None) -> str | None:
     topic_summary = topic_summaries.get(topic)
     if topic_summary:
         topic_label = topic.replace('_', ' ').title()
-        return f"## Today's {topic_label} News\n{topic_summary}"
+        return f"## This Week's {topic_label} News\n{topic_summary}"
 
     # No pre-built summary available for this topic
     return None
@@ -808,7 +851,7 @@ def _generate_fallback_briefing(conditions):
         String with a coherent briefing built from dimension states.
     """
     if not conditions:
-        return "Market conditions data is currently unavailable. Check back later for the daily briefing."
+        return "Market conditions data is currently unavailable. This week's review will follow once it is back."
 
     quadrant = conditions.get('quadrant', 'Unknown')
     dims = conditions.get('dimensions', {})
@@ -866,91 +909,135 @@ def _generate_fallback_briefing(conditions):
     return f"The macro environment is currently in {quadrant}. {p1}\n\n{p2.strip()}\n\n{p3}"
 
 
-def generate_daily_summary(market_data_summary, top_movers, top_movers_1d=None):
+def _previous_reviews(records, week_start, limit=2):
+    """The latest review from each of the `limit` weeks before `week_start`.
+
+    Records from before US-490.1 are daily; grouping by trading week keeps one
+    per week, so three weeks of daily history cannot flood the prompt.
     """
-    Generate the daily AI summary.
+    by_week = {}
+    for record in records:
+        try:
+            if record.get('week_start'):
+                rec_week = date.fromisoformat(record['week_start'])
+            else:
+                rec_week = briefing_week.trading_week(date.fromisoformat(record['date']))[0]
+        except (KeyError, TypeError, ValueError):
+            continue
+        if rec_week >= week_start:
+            continue
+        if rec_week not in by_week or record['date'] >= by_week[rec_week]['date']:
+            by_week[rec_week] = record
+    weeks = sorted(by_week)[-limit:]
+    return [(w, by_week[w]) for w in weeks]
+
+
+def _previous_reviews_block(records, week_start, title):
+    previous = _previous_reviews(records, week_start)
+    if not previous:
+        return ""
+    block = f"\n\n## {title} (earlier weeks, for continuity: refer back to earlier calls when relevant, but do not repeat their themes):\n"
+    for week, record in previous:
+        block += f"\n### Week of {week.isoformat()}:\n{record['summary']}\n"
+    return block
+
+
+def _same_week(record, week_start):
+    """True if a stored briefing belongs to the week now being reviewed."""
+    if not record:
+        return False
+    if record.get('week_start'):
+        return record['week_start'] == week_start.isoformat()
+    try:
+        return briefing_week.trading_week(date.fromisoformat(record['date']))[0] == week_start
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+GENERAL_SYSTEM_PROMPT = """You are the host of MacroClarity's Week in Review: one calm, trusted read on what changed in markets this week, why it matters, and what to watch next week. Your reader checks in once a week instead of following markets every session, and has chosen you because:
+
+1. You separate signal from noise. A move that reversed within the week is usually noise; a data surprise, a policy shift or a trend that held all week is signal.
+2. You CONNECT THE DOTS across stocks, rates, credit, the dollar and crypto, and tell one coherent story of the week.
+3. You point out when something is historically unusual, and you are honest about uncertainty.
+4. You make people SMARTER about markets, not just informed.
+
+Write for a financially literate non-professional — someone who reads the WSJ and owns ETFs but doesn't work in finance. Use financial terms freely, but always make the implication clear in plain language. Never cite z-scores or percentiles; translate them into plain-language magnitude (e.g., "near historic highs," "the largest weekly move in months"). Weekly levels and moves are fine in *What changed*; in *Why it matters*, favour plain-language magnitude over raw figures.
+
+RULES:
+- Ground the review in the market conditions framework. Use only the four quadrants: Goldilocks, Reflation, Stagflation, Deflation Risk. Say whether this week's data moved us toward or away from the current quadrant, using the conditions history for how long we have been there.
+- *What changed* covers only things that happened during the week under review. Never describe an earlier week's event or release as this week's.
+- When you cite a weekly move, use the WEEK IN NUMBERS figures exactly. Never compute a weekly change yourself from the latest levels; for a series not in WEEK IN NUMBERS, cite its level only.
+- The section reviews provided were written in this same run from the same data. Synthesize them into one picture rather than summarizing each in turn. Any figure that also appears in a section review must carry the identical value.
+- Do not repeat themes from earlier weeks' reviews; refer back to an earlier call when it matters ("Last week's review flagged...").
+- If news events drove markets this week, weave them in.
+
+You have access to a web search tool. Use it to check the timing of this week's data releases and to build next week's calendar.
+
+""" + weekly_review.copy_rules() + "\n\n" + weekly_review.output_format_instructions(weekly_review.GENERAL)
+
+
+def generate_weekly_summary(market_data_summary, top_movers):
+    """
+    Generate the general week-in-review briefing (US-490.2).
+
+    Runs last in the weekly job, after the five section reviews, and feeds
+    those reviews into the prompt so the run reads as one picture.
 
     Args:
         market_data_summary: String output from generate_market_summary()
         top_movers: List of top 5-day movers from calculate_top_movers(period=5)
-        top_movers_1d: List of top 1-day movers from calculate_top_movers(period=1)
 
     Returns:
-        dict with 'success', 'summary', and 'error' keys
+        dict with 'success', 'summary', 'structured' and 'error' keys
     """
+    week_start, week_end, through = briefing_week.current_week()
+    eastern = pytz.timezone('US/Eastern')
+    today = datetime.now(eastern).strftime('%Y-%m-%d')
+
     client, error = get_ai_client()
     if client is None:
         # AI unavailable — generate rule-based fallback (US-325.1)
         print("[AI Summary] AI client unavailable, generating rule-based fallback briefing")
         conditions = get_market_conditions()
         fallback = _generate_fallback_briefing(conditions)
-        eastern = pytz.timezone('US/Eastern')
-        today = datetime.now(eastern).strftime('%Y-%m-%d')
         save_summary(date_str=today, summary_text=fallback, web_search_used=False, news_context=None)
-        return {
-            'success': True,
-            'summary': fallback,
-            'error': None
-        }
+        return {'success': True, 'summary': fallback, 'structured': None, 'error': None}
 
     try:
-        eastern = pytz.timezone('US/Eastern')
-        today = datetime.now(eastern).strftime('%Y-%m-%d')
-
-        # Get previous summaries for context (14 days for foresight callbacks)
-        recent_summaries = get_recent_summaries(days=14)
-        previous_context = ""
-        if recent_summaries:
-            previous_context = "\n\n## YOUR PREVIOUS BRIEFINGS (14 days — reference your earlier predictions when relevant, but don't repeat themes):\n"
-            for s in recent_summaries:
-                if s["date"] != today:  # Don't include today if regenerating
-                    previous_context += f"\n### {s['date']}:\n{s['summary']}\n"
+        # Earlier weeks' reviews, for continuity
+        previous_context = _previous_reviews_block(
+            get_recent_summaries(days=21), week_start, "YOUR PREVIOUS WEEKLY REVIEWS")
 
         # Read news context from stored pipeline data
         news_context = _get_stored_news_context()
         news_section = ""
         if news_context:
-            news_section = f"\n\n## TODAY'S NEWS CONTEXT:\n{news_context}"
+            news_section = f"\n\n## THIS WEEK'S NEWS (summary of the week's articles):\n{news_context}"
 
-        # Get latest specific market briefings to use as context
-        specific_briefings_context = ""
+        # The section reviews from this week's run, generated before this one
         briefings_found = []
+        for label, record in (
+            ("Crypto/Bitcoin", get_latest_crypto_summary()),
+            ("Equity Markets", get_latest_equity_summary()),
+            ("Rates & Yield Curve", get_latest_rates_summary()),
+            ("Dollar & Currency", get_latest_dollar_summary()),
+            ("Credit Markets", get_latest_credit_summary()),
+        ):
+            if _same_week(record, week_start):
+                briefings_found.append(f"### {label} review:\n{record['summary']}")
 
-        crypto_summary = get_latest_crypto_summary()
-        if crypto_summary and crypto_summary.get("date") == today:
-            briefings_found.append(f"### Crypto/Bitcoin Briefing:\n{crypto_summary['summary']}")
-
-        equity_summary = get_latest_equity_summary()
-        if equity_summary and equity_summary.get("date") == today:
-            briefings_found.append(f"### Equity Markets Briefing:\n{equity_summary['summary']}")
-
-        rates_summary = get_latest_rates_summary()
-        if rates_summary and rates_summary.get("date") == today:
-            briefings_found.append(f"### Rates & Yield Curve Briefing:\n{rates_summary['summary']}")
-
-        dollar_summary = get_latest_dollar_summary()
-        if dollar_summary and dollar_summary.get("date") == today:
-            briefings_found.append(f"### Dollar & Currency Briefing:\n{dollar_summary['summary']}")
-
-        credit_summary = get_latest_credit_summary()
-        if credit_summary and credit_summary.get("date") == today:
-            briefings_found.append(f"### Credit Markets Briefing:\n{credit_summary['summary']}")
-
+        specific_briefings_context = ""
         if briefings_found:
-            specific_briefings_context = "\n\n## TODAY'S SPECIFIC MARKET BRIEFINGS (synthesize these into your narrative):\n" + "\n\n".join(briefings_found)
+            specific_briefings_context = (
+                "\n\n## THIS WEEK'S SECTION REVIEWS (same run, same data: synthesize these and "
+                "keep every shared figure identical):\n" + "\n\n".join(briefings_found))
 
-        # Format top movers — two sections: 1-day and 5-day (US-325.3)
         movers_text = ""
-        if top_movers_1d:
-            movers_text += "\n\n## TODAY'S BIGGEST MOVES (1-day, by z-score, most unusual):\n"
-            for m in top_movers_1d[:5]:
-                direction = "up" if m['change'] > 0 else "down"
-                movers_text += f"- {m['name']}: {m['change']:+.1f}{m['unit']} ({direction}, z-score: {m['z_score']:.1f})\n"
         if top_movers:
-            movers_text += "\n\n## MOST UNUSUAL 5-DAY MOVES (by z-score):\n"
+            movers_text = "\n\n## MOST UNUSUAL 5-DAY MOVES (largest relative to each series' own history):\n"
             for m in top_movers[:5]:
                 direction = "up" if m['change'] > 0 else "down"
-                movers_text += f"- {m['name']}: {m['change']:+.1f}{m['unit']} ({direction}, z-score: {m['z_score']:.1f})\n"
+                movers_text += f"- {m['name']}: {m['change']:+.1f}{m['unit']} ({direction})\n"
 
         # Build market conditions context (US-325.1)
         conditions = get_market_conditions()
@@ -960,55 +1047,38 @@ def generate_daily_summary(market_data_summary, top_movers, top_movers_1d=None):
         history = get_conditions_history()
         conditions_history = _build_conditions_history_context(history, days=90)
 
-        # The system prompt - quadrant-led three-paragraph narrative (US-325.1)
-        system_prompt = """You are a brilliant, trusted financial commentator - think of yourself as the host of the most valuable daily financial briefing that exists. Your audience is individual investors who are smart but busy. They could only pick ONE source of financial insight each day, and they've chosen you because:
+        week_numbers = weekly_review.week_in_numbers('general', week_start, through)
+        releases = weekly_review.macro_readings(week_start, through)
+        next_start, next_end = weekly_review.next_trading_week(week_end)
+        calendar = weekly_review.calendar_instructions(next_start, next_end, is_tavily_configured())
 
-1. You don't just report numbers - you CONNECT THE DOTS and tell the STORY of what's happening
-2. You have a gift for explaining complex market dynamics in clear, engaging language
-3. You see patterns others miss and aren't afraid to point out when something is historically unusual
-4. You're honest about uncertainty but confident in your analysis
-5. You make people SMARTER about markets, not just informed
-
-Your style is conversational but substantive - like a really smart friend who happens to be a market expert. You're not stuffy or formal, but you're also not dumbed down. Write for a financially literate non-professional — someone who reads the WSJ and owns ETFs but doesn't work in finance. Use financial terms freely, but always make the implication clear in plain language. Avoid z-scores, basis point counts, and percentile references — translate these into plain-language magnitude (e.g., "near historic highs," "the largest move in months").
-
-CRITICAL RULES:
-- Write EXACTLY 3 paragraphs (200-250 words total)
-- First paragraph: WHAT'S HAPPENING — Open by naming the current macro quadrant and what it means. Describe today's conditions across the four dimensions (quadrant, liquidity, risk, policy). Ground the reader in where we are.
-- Second paragraph: WHAT'S CHANGING — Use the conditions history to identify trends, transitions, and boundary proximity. How long have we been here? Are we drifting toward a different quadrant? Reference your own earlier predictions when relevant ("I noted X last week, and today...").
-- Third paragraph: WHAT TO DO — Portfolio implications. Connect conditions to asset class expectations. What should investors watch? End forward-looking.
-- DO NOT just list data points or metrics - ANALYZE and INTERPRET
-- DO NOT repeat themes from your previous briefings - find fresh angles
-- Use only the four quadrants: Goldilocks, Reflation, Stagflation, Deflation Risk
-- If specific market briefings (crypto, equity, rates, dollar) are provided, SYNTHESIZE key insights from them into a cohesive narrative rather than summarizing each separately
-- If something is at an extreme percentile or historically unusual, HIGHLIGHT it with context
-- Reference specific numbers sparingly but meaningfully
-- If news events are driving markets, weave them into the narrative
-
-You have access to a web search tool if you need to look up additional context about specific events, companies, or breaking news mentioned in the data. Use it when helpful to provide better context.
-
-You're writing the one thing someone reads about markets today. Make it count."""
-
-        # The user prompt with conditions context
-        user_prompt = f"""Today is {today}. Generate today's market briefing.
+        user_prompt = f"""{weekly_review.week_context_line(week_start, through)} Write this week's review.
 
 {conditions_context}
 {conditions_history}
 
+{week_numbers}
+
+{releases}
+
+## LATEST LEVELS (as of the most recent close)
 {market_data_summary}
 {movers_text}
 {news_section}
 {specific_briefings_context}
 {previous_context}
 
-Remember: 3 paragraphs (what's happening, what's changing, what to do), tell the story, don't repeat previous themes, make it the most valuable 30 seconds of their day."""
+{calendar}
 
-        # Make the API call with web search tool support
+Remember: headline, then What changed, Why it matters and What to watch next week, in the exact format. One coherent picture of the week, no repeated themes from earlier weeks."""
+
         result = call_ai_with_tools(
             client=client,
-            system_prompt=system_prompt,
+            system_prompt=GENERAL_SYSTEM_PROMPT,
             user_prompt=user_prompt,
             max_tokens=16000,
-            log_prefix="[AI Summary]"
+            log_prefix="[AI Summary]",
+            effort=weekly_review.REVIEW_EFFORT,
         )
 
         if not result['success']:
@@ -1021,34 +1091,29 @@ Remember: 3 paragraphs (what's happening, what's changing, what to do), tell the
                 web_search_used=False,
                 news_context=None
             )
-            return {
-                'success': True,
-                'summary': fallback,
-                'error': None
-            }
+            return {'success': True, 'summary': fallback, 'structured': None, 'error': None}
 
         summary = result['content']
+        structured, _ = weekly_review.parse_and_log(
+            summary, weekly_review.GENERAL, result.get('truncated', False), "[AI Summary]")
 
-        # Save the summary
         save_summary(
             date_str=today,
             summary_text=summary,
             web_search_used=bool(news_context),
-            news_context=news_context
+            news_context=news_context,
+            structured=structured,
         )
 
-        print(f"[AI Summary] Generated daily summary for {today}")
-        return {
-            'success': True,
-            'summary': summary,
-            'error': None
-        }
+        print(f"[AI Summary] Generated weekly review for {week_start} to {through}")
+        return {'success': True, 'summary': summary, 'structured': structured, 'error': None}
 
     except Exception as e:
         print(f"[AI Summary] Error generating summary: {e}")
         return {
             'success': False,
             'summary': None,
+            'structured': None,
             'error': str(e)
         }
 
@@ -1066,6 +1131,7 @@ def get_summary_for_display():
             'summary': summary['summary'],
             'web_search_used': summary.get('web_search_used', False),
             **briefing_week.display_fields(summary),
+            **_display_parts(summary),
         }
     return None
 
@@ -1109,7 +1175,7 @@ def get_recent_crypto_summaries(days=3):
     return _get_recent_summaries(load_crypto_summaries(), days)
 
 
-def save_crypto_summary(date_str, summary_text, web_search_used=False, news_context=None):
+def save_crypto_summary(date_str, summary_text, web_search_used=False, news_context=None, structured=None):
     """Save a new crypto summary, overwriting if same date exists."""
     data = load_crypto_summaries()
 
@@ -1125,6 +1191,7 @@ def save_crypto_summary(date_str, summary_text, web_search_used=False, news_cont
         "web_search_used": web_search_used,
         "news_context": news_context[:500] if news_context else None,
         **briefing_week.record_metadata(),
+        **_format_fields(structured),
     })
 
     # Keep last 90 days of summaries
@@ -1161,111 +1228,8 @@ def fetch_crypto_news():
 
 
 def generate_crypto_summary(crypto_data_summary):
-    """
-    Generate the daily Crypto/Bitcoin AI summary.
-
-    Args:
-        crypto_data_summary: String with crypto market data from generate_crypto_market_summary()
-
-    Returns:
-        dict with 'success', 'summary', and 'error' keys
-    """
-    client, error = get_ai_client()
-    if client is None:
-        return {
-            'success': False,
-            'summary': None,
-            'error': error
-        }
-
-    try:
-        eastern = pytz.timezone('US/Eastern')
-        today = datetime.now(eastern).strftime('%Y-%m-%d')
-
-        # Get previous crypto summaries for context
-        recent_summaries = get_recent_crypto_summaries(days=14)
-        previous_context = ""
-        if recent_summaries:
-            previous_context = "\n\n## YOUR PREVIOUS CRYPTO SUMMARIES (for continuity - don't repeat these):\n"
-            for s in recent_summaries:
-                if s["date"] != today:
-                    previous_context += f"\n### {s['date']}:\n{s['summary']}\n"
-
-        # Read crypto news context from stored pipeline data
-        news_context = _get_stored_news_context(topic='crypto')
-        news_section = ""
-        if news_context:
-            news_section = f"\n\n## TODAY'S CRYPTO NEWS:\n{news_context}"
-
-        # Crypto-specific system prompt
-        system_prompt = """You are a Bitcoin/crypto market analyst providing daily briefings for the Crypto page of a financial dashboard. Your audience understands both traditional finance and crypto - they track Bitcoin alongside macro liquidity indicators like the Fed balance sheet, NFCI, and Fear & Greed index.
-
-Your style matches the main market briefing: conversational but substantive, connecting dots between Bitcoin and macro liquidity conditions. Write for a financially literate non-professional — someone who reads the WSJ and owns ETFs but doesn't work in finance. Use financial terms freely, but always make the implication clear in plain language. Avoid z-scores, basis point counts, and percentile references — translate these into plain-language magnitude (e.g., "near historic highs," "the largest move in months").
-
-CRITICAL RULES:
-- Write EXACTLY 3 paragraphs (250-350 words total)
-- First paragraph: The Bitcoin/crypto story TODAY - price action, sentiment shifts, and what's driving it. Include specific price levels and percentage moves.
-- Second paragraph: The macro liquidity context - how Fed policy, financial conditions (NFCI), money supply (M2), and dollar strength relate to Bitcoin's current setup. Explain the connection clearly.
-- Third paragraph: The actionable takeaway - key support/resistance levels to watch, what would change the thesis, and how to think about positioning given current sentiment extremes.
-- Reference specific numbers (Fear & Greed level, Fed balance sheet trend, BTC price levels) meaningfully
-- If Fear & Greed is extreme (<25 or >75), explain the historical contrarian implications in detail
-- Connect Bitcoin to liquidity trends with clear cause-and-effect reasoning
-- DO NOT repeat themes from previous summaries
-- Be specific about what price levels matter and why
-
-You have access to a web search tool if you need to look up additional context about specific crypto events, regulatory news, or macro developments. Use it when helpful to provide better context.
-
-Remember: Bitcoin is a liquidity-sensitive asset. Your job is to explain HOW the macro setup affects BTC, what levels matter, and give readers a clear framework for thinking about it."""
-
-        user_prompt = f"""Today is {today}. Generate today's crypto/Bitcoin briefing.
-
-{crypto_data_summary}
-{news_section}
-{previous_context}
-
-Remember: 3 paragraphs, connect BTC to liquidity conditions, be specific about key levels, make it actionable."""
-
-        # Make the API call with web search tool support
-        print(f"[Crypto Summary] Calling OpenAI with {len(user_prompt)} chars of input...")
-        result = call_ai_with_tools(
-            client=client,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            max_tokens=16000,
-            log_prefix="[Crypto Summary]"
-        )
-
-        if not result['success']:
-            return {
-                'success': False,
-                'summary': None,
-                'error': result['error']
-            }
-
-        summary = result['content']
-
-        # Save the summary
-        save_crypto_summary(
-            date_str=today,
-            summary_text=summary,
-            web_search_used=bool(news_context),
-            news_context=news_context
-        )
-
-        print(f"[Crypto Summary] Generated crypto summary for {today}")
-        return {
-            'success': True,
-            'summary': summary,
-            'error': None
-        }
-
-    except Exception as e:
-        print(f"[Crypto Summary] Error generating summary: {e}")
-        return {
-            'success': False,
-            'summary': None,
-            'error': str(e)
-        }
+    """Generate the Crypto/Bitcoin week-in-review. See generate_section_review()."""
+    return generate_section_review('crypto', crypto_data_summary)
 
 
 def get_crypto_summary_for_display():
@@ -1281,6 +1245,7 @@ def get_crypto_summary_for_display():
             'summary': summary['summary'],
             'web_search_used': summary.get('web_search_used', False),
             **briefing_week.display_fields(summary),
+            **_display_parts(summary),
         }
     return None
 
@@ -1324,7 +1289,7 @@ def get_recent_equity_summaries(days=3):
     return _get_recent_summaries(load_equity_summaries(), days)
 
 
-def save_equity_summary(date_str, summary_text, web_search_used=False, news_context=None):
+def save_equity_summary(date_str, summary_text, web_search_used=False, news_context=None, structured=None):
     """Save a new equity summary, overwriting if same date exists."""
     data = load_equity_summaries()
 
@@ -1340,6 +1305,7 @@ def save_equity_summary(date_str, summary_text, web_search_used=False, news_cont
         "web_search_used": web_search_used,
         "news_context": news_context[:500] if news_context else None,
         **briefing_week.record_metadata(),
+        **_format_fields(structured),
     })
 
     # Keep last 90 days of summaries
@@ -1376,111 +1342,8 @@ def fetch_equity_news():
 
 
 def generate_equity_summary(equity_data_summary):
-    """
-    Generate the daily Equity Markets AI summary.
-
-    Args:
-        equity_data_summary: String with equity market data from generate_equity_market_summary()
-
-    Returns:
-        dict with 'success', 'summary', and 'error' keys
-    """
-    client, error = get_ai_client()
-    if client is None:
-        return {
-            'success': False,
-            'summary': None,
-            'error': error
-        }
-
-    try:
-        eastern = pytz.timezone('US/Eastern')
-        today = datetime.now(eastern).strftime('%Y-%m-%d')
-
-        # Get previous equity summaries for context
-        recent_summaries = get_recent_equity_summaries(days=14)
-        previous_context = ""
-        if recent_summaries:
-            previous_context = "\n\n## YOUR PREVIOUS EQUITY SUMMARIES (for continuity - don't repeat these):\n"
-            for s in recent_summaries:
-                if s["date"] != today:
-                    previous_context += f"\n### {s['date']}:\n{s['summary']}\n"
-
-        # Read equity news context from stored pipeline data
-        news_context = _get_stored_news_context(topic='equity')
-        news_section = ""
-        if news_context:
-            news_section = f"\n\n## TODAY'S EQUITY NEWS:\n{news_context}"
-
-        # Equity-specific system prompt
-        system_prompt = """You are an equity market analyst providing daily briefings for the Equity Markets page of a financial dashboard. Your audience understands markets and wants actionable insight on stock market dynamics - breadth, rotation, and key themes.
-
-Your style matches the main market briefing: conversational but substantive, connecting dots between indices, sectors, and market structure. Write for a financially literate non-professional — someone who reads the WSJ and owns ETFs but doesn't work in finance. Use financial terms freely, but always make the implication clear in plain language. Avoid z-scores, basis point counts, and percentile references — translate these into plain-language magnitude (e.g., "near historic highs," "the largest move in months").
-
-CRITICAL RULES:
-- Write EXACTLY 3 paragraphs (250-350 words total)
-- First paragraph: The equity market story TODAY - what's leading (sectors, styles), what's lagging, and what the price action tells us. Include specific index levels and percentage moves.
-- Second paragraph: The structural picture - market breadth, concentration risk, and what the ratios are saying. Explain WHY narrow breadth or extreme concentration matters in plain terms.
-- Third paragraph: Style and size rotation signals - growth vs value, small vs large cap dynamics. What are these telling us about economic expectations and risk appetite? End with specific things to watch.
-- Reference specific numbers (index levels, percentile rankings, ratio changes) meaningfully
-- Highlight any EXTREME readings (>95th or <5th percentile) and explain the historical context
-- Connect small cap vs large cap performance to economic expectations with clear reasoning
-- If growth/value rotation is notable, explain what it signals for the broader market
-- DO NOT repeat themes from previous summaries
-
-You have access to a web search tool if you need to look up additional context about specific companies, earnings, sector news, or market events. Use it when helpful to provide better context.
-
-Remember: Your job is to help investors understand WHAT is happening under the surface of the market, not just whether it's up or down. Give them a mental model for thinking about market structure."""
-
-        user_prompt = f"""Today is {today}. Generate today's equity markets briefing.
-
-{equity_data_summary}
-{news_section}
-{previous_context}
-
-Remember: 3 paragraphs, tell the story of market structure and rotation, explain why extremes matter, make it actionable."""
-
-        # Make the API call with web search tool support
-        print(f"[Equity Summary] Calling OpenAI with {len(user_prompt)} chars of input...")
-        result = call_ai_with_tools(
-            client=client,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            max_tokens=16000,
-            log_prefix="[Equity Summary]"
-        )
-
-        if not result['success']:
-            return {
-                'success': False,
-                'summary': None,
-                'error': result['error']
-            }
-
-        summary = result['content']
-
-        # Save the summary
-        save_equity_summary(
-            date_str=today,
-            summary_text=summary,
-            web_search_used=bool(news_context),
-            news_context=news_context
-        )
-
-        print(f"[Equity Summary] Generated equity summary for {today}")
-        return {
-            'success': True,
-            'summary': summary,
-            'error': None
-        }
-
-    except Exception as e:
-        print(f"[Equity Summary] Error generating summary: {e}")
-        return {
-            'success': False,
-            'summary': None,
-            'error': str(e)
-        }
+    """Generate the Equity Markets week-in-review. See generate_section_review()."""
+    return generate_section_review('equity', equity_data_summary)
 
 
 def get_equity_summary_for_display():
@@ -1496,6 +1359,7 @@ def get_equity_summary_for_display():
             'summary': summary['summary'],
             'web_search_used': summary.get('web_search_used', False),
             **briefing_week.display_fields(summary),
+            **_display_parts(summary),
         }
     return None
 
@@ -1518,7 +1382,7 @@ def load_rates_summaries():
     return {"summaries": []}
 
 
-def save_rates_summary(date_str, summary_text, web_search_used=False, news_context=None):
+def save_rates_summary(date_str, summary_text, web_search_used=False, news_context=None, structured=None):
     """Save a rates AI summary to storage."""
     data = load_rates_summaries()
 
@@ -1537,6 +1401,7 @@ def save_rates_summary(date_str, summary_text, web_search_used=False, news_conte
         "web_search_used": web_search_used,
         "news_context": news_context[:500] if news_context else None,
         **briefing_week.record_metadata(),
+        **_format_fields(structured),
     }
 
     if existing_idx is not None:
@@ -1594,111 +1459,8 @@ def fetch_rates_news():
 
 
 def generate_rates_summary(rates_data_summary):
-    """
-    Generate the daily Rates & Yield Curve AI summary.
-
-    Args:
-        rates_data_summary: String with rates data from generate_rates_market_summary()
-
-    Returns:
-        dict with 'success', 'summary', and 'error' keys
-    """
-    client, error = get_ai_client()
-    if client is None:
-        return {
-            'success': False,
-            'summary': None,
-            'error': error
-        }
-
-    try:
-        eastern = pytz.timezone('US/Eastern')
-        today = datetime.now(eastern).strftime('%Y-%m-%d')
-
-        # Get previous rates summaries for context
-        recent_summaries = get_recent_rates_summaries(days=14)
-        previous_context = ""
-        if recent_summaries:
-            previous_context = "\n\n## YOUR PREVIOUS RATES SUMMARIES (for continuity - don't repeat these):\n"
-            for s in recent_summaries:
-                if s["date"] != today:
-                    previous_context += f"\n### {s['date']}:\n{s['summary']}\n"
-
-        # Read rates news context from stored pipeline data
-        news_context = _get_stored_news_context(topic='rates')
-        news_section = ""
-        if news_context:
-            news_section = f"\n\n## TODAY'S RATES NEWS:\n{news_context}"
-
-        # Rates-specific system prompt
-        system_prompt = """You are a fixed income analyst providing daily briefings for the Rates & Yield Curve page of a financial dashboard. Your audience understands markets and wants actionable insight on interest rates, the yield curve, and their implications.
-
-Your style matches the main market briefing: conversational but substantive, connecting dots between rates, the curve, inflation expectations, and what they mean for other assets. Write for a financially literate non-professional — someone who reads the WSJ and owns ETFs but doesn't work in finance. Use financial terms freely, but always make the implication clear in plain language. Avoid z-scores, basis point counts, and percentile references — translate these into plain-language magnitude (e.g., "near historic highs," "the largest move in months").
-
-CRITICAL RULES:
-- Write EXACTLY 3 paragraphs (250-350 words total)
-- First paragraph: The rates story TODAY - what's moving in yields and spreads, why (economic data, Fed expectations, supply/demand), and what it signals. Include specific yield levels and basis point changes.
-- Second paragraph: The yield curve and inflation picture - explain the curve shape (inverted/flat/steep) and what it historically signals. Connect real yields to Fed policy stance and breakeven inflation to market inflation expectations. Use plain language to explain the implications.
-- Third paragraph: The "so what" for investors - how do current rates affect equity valuations, credit, and duration positioning? What specific levels would change the outlook? End with actionable guidance.
-- Reference specific numbers (yields, spreads in basis points, percentile rankings) meaningfully
-- Highlight any EXTREME readings (>95th or <5th percentile) or key threshold crossings with historical context
-- If the yield curve is inverted or recently un-inverted, explain the recession implications clearly
-- Connect real yields to Fed policy stance (restrictive/accommodative) with clear reasoning
-- DO NOT repeat themes from previous summaries
-
-You have access to a web search tool if you need to look up additional context about Fed policy, economic data releases, or bond market developments. Use it when helpful to provide better context.
-
-Remember: Your job is to help investors understand what rates are telling us about the economy and what it means for their portfolios. Make the fixed income world accessible."""
-
-        user_prompt = f"""Today is {today}. Generate today's rates & yield curve briefing.
-
-{rates_data_summary}
-{news_section}
-{previous_context}
-
-Remember: 3 paragraphs, tell the rates story clearly, explain curve signals, make it actionable for investors."""
-
-        # Make the API call with web search tool support
-        print(f"[Rates Summary] Calling OpenAI with {len(user_prompt)} chars of input...")
-        result = call_ai_with_tools(
-            client=client,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            max_tokens=16000,
-            log_prefix="[Rates Summary]"
-        )
-
-        if not result['success']:
-            return {
-                'success': False,
-                'summary': None,
-                'error': result['error']
-            }
-
-        summary = result['content']
-
-        # Save the summary
-        save_rates_summary(
-            date_str=today,
-            summary_text=summary,
-            web_search_used=bool(news_context),
-            news_context=news_context
-        )
-
-        print(f"[Rates Summary] Generated rates summary for {today}")
-        return {
-            'success': True,
-            'summary': summary,
-            'error': None
-        }
-
-    except Exception as e:
-        print(f"[Rates Summary] Error generating summary: {e}")
-        return {
-            'success': False,
-            'summary': None,
-            'error': str(e)
-        }
+    """Generate the Rates & Yield Curve week-in-review. See generate_section_review()."""
+    return generate_section_review('rates', rates_data_summary)
 
 
 def get_rates_summary_for_display():
@@ -1714,6 +1476,7 @@ def get_rates_summary_for_display():
             'summary': summary['summary'],
             'web_search_used': summary.get('web_search_used', False),
             **briefing_week.display_fields(summary),
+            **_display_parts(summary),
         }
     return None
 
@@ -1736,7 +1499,7 @@ def load_dollar_summaries():
     return {"summaries": []}
 
 
-def save_dollar_summary(date_str, summary_text, web_search_used=False, news_context=None):
+def save_dollar_summary(date_str, summary_text, web_search_used=False, news_context=None, structured=None):
     """Save a dollar AI summary to storage."""
     data = load_dollar_summaries()
 
@@ -1755,6 +1518,7 @@ def save_dollar_summary(date_str, summary_text, web_search_used=False, news_cont
         "web_search_used": web_search_used,
         "news_context": news_context[:500] if news_context else None,
         **briefing_week.record_metadata(),
+        **_format_fields(structured),
     }
 
     if existing_idx is not None:
@@ -1812,111 +1576,8 @@ def fetch_dollar_news():
 
 
 def generate_dollar_summary(dollar_data_summary):
-    """
-    Generate the daily Dollar & Currency AI summary.
-
-    Args:
-        dollar_data_summary: String with dollar data from generate_dollar_market_summary()
-
-    Returns:
-        dict with 'success', 'summary', and 'error' keys
-    """
-    client, error = get_ai_client()
-    if client is None:
-        return {
-            'success': False,
-            'summary': None,
-            'error': error
-        }
-
-    try:
-        eastern = pytz.timezone('US/Eastern')
-        today = datetime.now(eastern).strftime('%Y-%m-%d')
-
-        # Get previous dollar summaries for context
-        recent_summaries = get_recent_dollar_summaries(days=14)
-        previous_context = ""
-        if recent_summaries:
-            previous_context = "\n\n## YOUR PREVIOUS DOLLAR SUMMARIES (for continuity - don't repeat these):\n"
-            for s in recent_summaries:
-                if s["date"] != today:
-                    previous_context += f"\n### {s['date']}:\n{s['summary']}\n"
-
-        # Read dollar news context from stored pipeline data
-        news_context = _get_stored_news_context(topic='dollar')
-        news_section = ""
-        if news_context:
-            news_section = f"\n\n## TODAY'S DOLLAR NEWS:\n{news_context}"
-
-        # Dollar-specific system prompt
-        system_prompt = """You are a currency analyst providing daily briefings for the Dollar & Currency page of a financial dashboard. Your audience understands markets and wants actionable insight on the US dollar, currency dynamics, and their cross-asset implications.
-
-Your style matches the main market briefing: conversational but substantive, connecting dots between the dollar, Fed policy, global central bank divergence, and implications for other assets. Write for a financially literate non-professional — someone who reads the WSJ and owns ETFs but doesn't work in finance. Use financial terms freely, but always make the implication clear in plain language. Avoid z-scores, basis point counts, and percentile references — translate these into plain-language magnitude (e.g., "near historic highs," "the largest move in months").
-
-CRITICAL RULES:
-- Write EXACTLY 3 paragraphs (250-350 words total)
-- First paragraph: The dollar story TODAY - what's moving DXY and key pairs (especially USD/JPY), why (Fed expectations, economic data, central bank divergence), and what it signals. Include specific levels and percentage moves.
-- Second paragraph: The macro context - explain where we are in the "Dollar Smile" (risk-off strength vs growth/yield strength vs weak middle), what carry trade dynamics are telling us, and how central bank policy divergence is driving flows. Connect to rate differentials clearly.
-- Third paragraph: The cross-asset implications - how does dollar strength/weakness affect emerging markets, commodities, multinational earnings, and positioning? What specific DXY levels would change the outlook? End with actionable guidance.
-- Reference specific numbers (DXY level, USD/JPY, percentile rankings) meaningfully
-- Highlight any EXTREME readings (>95th or <5th percentile) or key threshold crossings with historical context
-- If USD/JPY is at notable levels, explain the carry trade implications and BOJ policy dynamics
-- Connect dollar moves to Fed policy expectations clearly
-- DO NOT repeat themes from previous summaries
-
-You have access to a web search tool if you need to look up additional context about Fed policy, central bank decisions, or currency market developments. Use it when helpful to provide better context.
-
-Remember: Your job is to help investors understand what the dollar is telling us about global risk appetite and policy divergence, and what it means for their portfolios."""
-
-        user_prompt = f"""Today is {today}. Generate today's dollar & currency briefing.
-
-{dollar_data_summary}
-{news_section}
-{previous_context}
-
-Remember: 3 paragraphs, tell the dollar story clearly, explain the Dollar Smile and carry dynamics, make it actionable for investors."""
-
-        # Make the API call with web search tool support
-        print(f"[Dollar Summary] Calling OpenAI with {len(user_prompt)} chars of input...")
-        result = call_ai_with_tools(
-            client=client,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            max_tokens=16000,
-            log_prefix="[Dollar Summary]"
-        )
-
-        if not result['success']:
-            return {
-                'success': False,
-                'summary': None,
-                'error': result['error']
-            }
-
-        summary = result['content']
-
-        # Save the summary
-        save_dollar_summary(
-            date_str=today,
-            summary_text=summary,
-            web_search_used=bool(news_context),
-            news_context=news_context
-        )
-
-        print(f"[Dollar Summary] Generated dollar summary for {today}")
-        return {
-            'success': True,
-            'summary': summary,
-            'error': None
-        }
-
-    except Exception as e:
-        print(f"[Dollar Summary] Error generating summary: {e}")
-        return {
-            'success': False,
-            'summary': None,
-            'error': str(e)
-        }
+    """Generate the Dollar & Currency week-in-review. See generate_section_review()."""
+    return generate_section_review('dollar', dollar_data_summary)
 
 
 def get_dollar_summary_for_display():
@@ -1932,6 +1593,7 @@ def get_dollar_summary_for_display():
             'summary': summary['summary'],
             'web_search_used': summary.get('web_search_used', False),
             **briefing_week.display_fields(summary),
+            **_display_parts(summary),
         }
     return None
 
@@ -1954,7 +1616,7 @@ def load_credit_summaries():
     return {"summaries": []}
 
 
-def save_credit_summary(date_str, summary_text, web_search_used=False, news_context=None):
+def save_credit_summary(date_str, summary_text, web_search_used=False, news_context=None, structured=None):
     """Save a credit AI summary to storage."""
     data = load_credit_summaries()
 
@@ -1972,6 +1634,7 @@ def save_credit_summary(date_str, summary_text, web_search_used=False, news_cont
         "web_search_used": web_search_used,
         "news_context": news_context[:500] if news_context else None,
         **briefing_week.record_metadata(),
+        **_format_fields(structured),
     }
 
     if existing_idx is not None:
@@ -2024,107 +1687,8 @@ def fetch_credit_news():
 
 
 def generate_credit_summary(credit_data_summary):
-    """
-    Generate the daily Credit Markets AI summary.
-
-    Args:
-        credit_data_summary: String with credit market data from generate_credit_market_summary()
-
-    Returns:
-        dict with 'success', 'summary', and 'error' keys
-    """
-    client, error = get_ai_client()
-    if client is None:
-        return {
-            'success': False,
-            'summary': None,
-            'error': error
-        }
-
-    try:
-        eastern = pytz.timezone('US/Eastern')
-        today = datetime.now(eastern).strftime('%Y-%m-%d')
-
-        recent_summaries = get_recent_credit_summaries(days=14)
-        previous_context = ""
-        if recent_summaries:
-            previous_context = "\n\n## YOUR PREVIOUS CREDIT SUMMARIES (for continuity - don't repeat these):\n"
-            for s in recent_summaries:
-                if s["date"] != today:
-                    previous_context += f"\n### {s['date']}:\n{s['summary']}\n"
-
-        # Read credit news context from stored pipeline data
-        news_context = _get_stored_news_context(topic='credit')
-        news_section = ""
-        if news_context:
-            news_section = f"\n\n## TODAY'S CREDIT NEWS:\n{news_context}"
-
-        system_prompt = """You are a credit market analyst providing daily briefings for the Credit Markets page of a financial dashboard. Your audience understands markets and wants actionable insight on corporate credit conditions, spread dynamics, and what credit is signaling about the economy.
-
-Your style matches the main market briefing: conversational but substantive, connecting dots between spread levels, market conditions, default risk, and cross-asset implications. Write for a financially literate non-professional — someone who reads the WSJ and owns ETFs but doesn't work in finance. Use financial terms freely, but always make the implication clear in plain language. Avoid z-scores, basis point counts, and percentile references — translate these into plain-language magnitude (e.g., "near historic highs," "the largest move in months").
-
-CRITICAL RULES:
-- Write EXACTLY 3 paragraphs (250-350 words total)
-- First paragraph: The credit story TODAY - where HY and IG spreads are, whether they're tight/normal/wide versus history (percentile), and what the trend has been. Include specific spread levels in basis points.
-- Second paragraph: The macro interpretation - what current spread levels imply about default risk, the economic cycle, and risk appetite. Connect to the current market conditions quadrant and explain whether credit conditions are confirming or diverging from equity market signals.
-- Third paragraph: What to watch - key spread thresholds that would change the outlook, CCC vs HY dynamics (distress concentration), and the main risk scenarios (spread widening triggers, liquidity conditions). End with specific actionable guidance.
-- Reference specific numbers (spread levels in bps, percentile rankings) meaningfully
-- Highlight any EXTREME readings (>95th or <5th percentile) with historical context
-- If HY is at notably tight levels, explain the complacency risk and what could trigger widening
-- Connect credit spread moves to the broader economic outlook clearly
-- DO NOT repeat themes from previous summaries
-
-You have access to a web search tool if you need to look up additional context about credit market conditions, major bond issuances, or corporate default news. Use it when helpful to provide better context.
-
-Remember: Your job is to help investors understand what the credit market is pricing in about economic health, default risk, and financial conditions — and what that means for portfolio positioning."""
-
-        user_prompt = f"""Today is {today}. Generate today's credit markets briefing.
-
-{credit_data_summary}
-{news_section}
-{previous_context}
-
-Remember: 3 paragraphs, tell the credit story clearly, explain what spread levels mean for economic outlook and risk, make it actionable for investors."""
-
-        print(f"[Credit Summary] Calling OpenAI with {len(user_prompt)} chars of input...")
-        result = call_ai_with_tools(
-            client=client,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            max_tokens=16000,
-            log_prefix="[Credit Summary]"
-        )
-
-        if not result['success']:
-            return {
-                'success': False,
-                'summary': None,
-                'error': result['error']
-            }
-
-        summary = result['content']
-
-        save_credit_summary(
-            date_str=today,
-            summary_text=summary,
-            web_search_used=bool(news_context),
-            news_context=news_context
-        )
-
-        print(f"[Credit Summary] Generated credit summary for {today}")
-        return {
-            'success': True,
-            'summary': summary,
-            'error': None
-        }
-
-    except Exception as e:
-        print(f"[Credit Summary] Error generating summary: {e}")
-        return {
-            'success': False,
-            'summary': None,
-            'error': str(e)
-        }
+    """Generate the Credit Markets week-in-review. See generate_section_review()."""
+    return generate_section_review('credit', credit_data_summary)
 
 
 def get_credit_summary_for_display():
@@ -2140,8 +1704,194 @@ def get_credit_summary_for_display():
             'summary': summary['summary'],
             'web_search_used': summary.get('web_search_used', False),
             **briefing_week.display_fields(summary),
+            **_display_parts(summary),
         }
     return None
+
+
+# ============================================================================
+# Section week-in-review (US-490.2)
+# ============================================================================
+# The five section reviews share one prompt shape and one code path. Each
+# entry carries what differs: the analyst persona, the section's focus, the
+# metrics in its WEEK IN NUMBERS block, and its storage functions.
+
+SECTION_REVIEWS = {
+    'crypto': {
+        'log_prefix': '[Crypto Summary]',
+        'title': 'Bitcoin',
+        'persona': 'a Bitcoin/crypto market analyst writing the weekly review for the Crypto page',
+        'audience': 'Your reader tracks Bitcoin alongside macro liquidity indicators like the Fed balance sheet, financial conditions (NFCI) and the Fear & Greed index.',
+        'focus': (
+            "Bitcoin's week: price action, sentiment, and how macro liquidity (Fed balance sheet, "
+            "financial conditions, M2, the dollar) shaped it. Bitcoin is a liquidity-sensitive "
+            "asset, so explain the cause and effect. If Fear & Greed is extreme (below 25 or above "
+            "75), give the historical contrarian read. Name the price levels that matter and why."
+        ),
+        'save': save_crypto_summary,
+        'recent': get_recent_crypto_summaries,
+    },
+    'equity': {
+        'log_prefix': '[Equity Summary]',
+        'title': 'Equity',
+        'persona': 'an equity market analyst writing the weekly review for the Equity Markets page',
+        'audience': 'Your reader wants to understand what is happening under the surface of the stock market, not just whether it went up or down.',
+        'focus': (
+            "The equity market's week: which indices, sectors and styles led or lagged, market "
+            "breadth and concentration, growth vs value and small vs large caps, and what they say "
+            "about economic expectations and risk appetite. Explain why narrow breadth or extreme "
+            "concentration matters in plain terms."
+        ),
+        'save': save_equity_summary,
+        'recent': get_recent_equity_summaries,
+    },
+    'rates': {
+        'log_prefix': '[Rates Summary]',
+        'title': 'Rates',
+        'persona': 'a fixed income analyst writing the weekly review for the Rates & Yield Curve page',
+        'audience': 'Your reader wants to know what rates are saying about the economy and what that means for their portfolio.',
+        'focus': (
+            "Treasury yields and the curve over the week: what moved yields (data, Fed "
+            "expectations, supply), the curve's shape and what it has historically signalled, real "
+            "yields against the Fed's stance, breakeven inflation expectations, and what rates mean "
+            "for stocks, credit and duration. If the curve is inverted or recently un-inverted, "
+            "explain the recession read clearly."
+        ),
+        'save': save_rates_summary,
+        'recent': get_recent_rates_summaries,
+    },
+    'dollar': {
+        'log_prefix': '[Dollar Summary]',
+        'title': 'Currency',
+        'persona': 'a currency analyst writing the weekly review for the Dollar & Currency page',
+        'audience': 'Your reader wants to know what the dollar says about global risk appetite and policy divergence, and what it means for their portfolio.',
+        'focus': (
+            "The dollar's week: the dollar index and key pairs (especially USD/JPY), Fed "
+            "expectations and central bank divergence, where we are in the \"Dollar Smile\", "
+            "carry-trade dynamics, and the cross-asset effects on emerging markets, commodities and "
+            "multinational earnings."
+        ),
+        'save': save_dollar_summary,
+        'recent': get_recent_dollar_summaries,
+    },
+    'credit': {
+        'log_prefix': '[Credit Summary]',
+        'title': 'Credit',
+        'persona': 'a credit market analyst writing the weekly review for the Credit Markets page',
+        'audience': 'Your reader wants to know what the credit market is pricing in about economic health, default risk and financial conditions.',
+        'focus': (
+            "Corporate credit over the week: high-yield and investment-grade spreads against "
+            "history, CCC vs high-yield (where distress is concentrated), what spreads imply about "
+            "default risk and the cycle, how spreads fit the current market conditions quadrant, "
+            "and whether credit is confirming or diverging from equities. If high-yield spreads are notably tight, explain the complacency risk."
+        ),
+        'save': save_credit_summary,
+        'recent': get_recent_credit_summaries,
+    },
+}
+
+
+def section_system_prompt(section):
+    """System prompt for one section's weekly review."""
+    cfg = SECTION_REVIEWS[section]
+    return f"""You are {cfg['persona']} of MacroClarity, a calm weekly read for individual investors. {cfg['audience']}
+
+Write for a financially literate non-professional — someone who reads the WSJ and owns ETFs but doesn't work in finance. Use financial terms freely, but always make the implication clear in plain language. Never cite z-scores or percentiles; translate them into plain-language magnitude (e.g., "near historic highs," "the largest weekly move in months"). Weekly levels and moves are fine in *What changed*.
+
+FOCUS: {cfg['focus']}
+
+RULES:
+- Separate signal from noise: a move that reversed within the week is usually noise; a data surprise, a policy shift or a trend that held all week is signal.
+- *What changed* covers only things that happened during the week under review. Never describe an earlier week's event as this week's.
+- When you cite a weekly move, use the WEEK IN NUMBERS figures exactly. Never compute a weekly change yourself from the latest levels; for a series not in WEEK IN NUMBERS, cite its level only. The general review is built from yours, so its figures must match.
+- Do not repeat themes from earlier weeks' reviews.
+
+You have access to a web search tool. Use it to check the timing of this week's releases and to build next week's calendar for this market.
+
+{weekly_review.copy_rules()}
+
+{weekly_review.output_format_instructions(weekly_review.SECTION)}"""
+
+
+def generate_section_review(section, data_summary):
+    """
+    Generate one section's week-in-review briefing (US-490.2).
+
+    Args:
+        section: key of SECTION_REVIEWS ('crypto', 'equity', 'rates', 'dollar', 'credit')
+        data_summary: String with the section's market data from the
+            dashboard's generate_<section>_market_summary()
+
+    Returns:
+        dict with 'success', 'summary', 'structured' and 'error' keys
+    """
+    cfg = SECTION_REVIEWS[section]
+    log_prefix = cfg['log_prefix']
+    client, error = get_ai_client()
+    if client is None:
+        return {'success': False, 'summary': None, 'structured': None, 'error': error}
+
+    try:
+        week_start, week_end, through = briefing_week.current_week()
+        eastern = pytz.timezone('US/Eastern')
+        today = datetime.now(eastern).strftime('%Y-%m-%d')
+
+        previous_context = _previous_reviews_block(
+            cfg['recent'](days=21), week_start,
+            f"YOUR PREVIOUS {section.upper()} REVIEWS")
+
+        # Read the section's news context from stored pipeline data
+        news_context = _get_stored_news_context(topic=section)
+        news_section = f"\n\n{news_context}" if news_context else ""
+
+        week_numbers = weekly_review.week_in_numbers(section, week_start, through)
+        next_start, next_end = weekly_review.next_trading_week(week_end)
+        calendar = weekly_review.calendar_instructions(next_start, next_end, is_tavily_configured())
+
+        user_prompt = f"""{weekly_review.week_context_line(week_start, through)} Write this week's {cfg['title'].lower()} review.
+
+{week_numbers}
+
+## LATEST LEVELS (as of the most recent close)
+{data_summary}
+{news_section}
+{previous_context}
+
+{calendar}
+
+Remember: What changed, Why it matters and What to watch next week, in the exact format, scoped to this market."""
+
+        print(f"{log_prefix} Calling AI with {len(user_prompt)} chars of input...")
+        result = call_ai_with_tools(
+            client=client,
+            system_prompt=section_system_prompt(section),
+            user_prompt=user_prompt,
+            max_tokens=16000,
+            log_prefix=log_prefix,
+            effort=weekly_review.REVIEW_EFFORT,
+        )
+
+        if not result['success']:
+            return {'success': False, 'summary': None, 'structured': None, 'error': result['error']}
+
+        summary = result['content']
+        structured, _ = weekly_review.parse_and_log(
+            summary, weekly_review.SECTION, result.get('truncated', False), log_prefix)
+
+        cfg['save'](
+            date_str=today,
+            summary_text=summary,
+            web_search_used=bool(news_context),
+            news_context=news_context,
+            structured=structured,
+        )
+
+        print(f"{log_prefix} Generated {section} review for {week_start} to {through}")
+        return {'success': True, 'summary': summary, 'structured': structured, 'error': None}
+
+    except Exception as e:
+        print(f"{log_prefix} Error generating summary: {e}")
+        return {'success': False, 'summary': None, 'structured': None, 'error': str(e)}
 
 
 # ============================================================================

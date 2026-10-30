@@ -4,14 +4,14 @@ Tests for US-183.2: Homepage Narrative Cohesion — AI Prompt Anchoring (§1 + �
 Verifies that:
 1. generate_market_conditions_synthesis() (dashboard.py §1) injects a regime-anchoring
    prefix into its user_prompt when macro_regime is available and not 'unknown'.
-2. generate_daily_summary() (ai_summary.py §2) injects a regime-anchoring prefix into
+2. generate_weekly_summary() (ai_summary.py §2) injects a regime-anchoring prefix into
    its user_prompt when macro_regime is available and not 'unknown'.
 3. Both functions fall back gracefully (no prefix, no crash) when macro_regime is None
    or state is 'unknown' / 'Unknown'.
 4. No HTML template containers are modified — regime reference is in generated text only.
 
 Tests are primarily static (source-code analysis) supplemented by functional tests
-with mocking for generate_daily_summary() which can be tested without Flask.
+with mocking for generate_weekly_summary() which can be tested without Flask.
 """
 
 import os
@@ -35,7 +35,7 @@ def read_source(filename):
 # =============================================================================
 
 class TestStaticAiSummaryConditionsContext(unittest.TestCase):
-    """generate_daily_summary() must use market conditions context (US-325.1)."""
+    """generate_weekly_summary() must use market conditions context (US-325.1)."""
 
     @classmethod
     def setUpClass(cls):
@@ -70,12 +70,13 @@ class TestStaticAiSummaryConditionsContext(unittest.TestCase):
                       'conditions_history not interpolated in user_prompt in ai_summary.py')
 
     def test_quadrant_naming_instruction(self):
-        self.assertIn('naming the current macro quadrant', self.src,
-                      'Quadrant-naming instruction not found in ai_summary.py')
+        self.assertIn('Use only the four quadrants', self.src,
+                      'Quadrant instruction not found in ai_summary.py')
 
-    def test_three_paragraph_structure(self):
-        self.assertIn('3 paragraphs', self.src,
-                      'Three-paragraph instruction not found in ai_summary.py')
+    def test_week_in_review_structure(self):
+        # US-490.2: the three daily paragraphs became the week-in-review contract
+        self.assertIn('weekly_review.output_format_instructions(weekly_review.GENERAL)', self.src,
+                      'Week-in-review output contract not found in ai_summary.py')
 
     def test_old_regime_prefix_removed(self):
         self.assertNotIn('regime_prefix_briefing', self.src,
@@ -96,12 +97,12 @@ class TestNoTemplateChanges(unittest.TestCase):
 
 
 # =============================================================================
-# Functional tests — generate_daily_summary() with mocking
+# Functional tests — generate_weekly_summary() with mocking
 # =============================================================================
 
 class TestGenerateDailySummaryConditionsContext(unittest.TestCase):
     """
-    Functional tests for conditions context injection in generate_daily_summary().
+    Functional tests for conditions context injection in generate_weekly_summary().
     Mocks get_market_conditions() and call_ai_with_tools() to verify prompt construction.
     """
 
@@ -138,7 +139,7 @@ class TestGenerateDailySummaryConditionsContext(unittest.TestCase):
     }
 
     def _call_with_mocked_conditions(self, conditions, history=None):
-        """Helper: call generate_daily_summary() with mocked conditions and capture prompt."""
+        """Helper: call generate_weekly_summary() with mocked conditions and capture prompt."""
         import ai_summary as ai_mod
 
         captured = {}
@@ -160,7 +161,7 @@ class TestGenerateDailySummaryConditionsContext(unittest.TestCase):
              patch.object(ai_mod, 'get_latest_dollar_summary', return_value=None), \
              patch.object(ai_mod, 'get_latest_credit_summary', return_value=None), \
              patch.object(ai_mod, 'save_summary', return_value=None):
-            result = ai_mod.generate_daily_summary('## MARKET DATA\nTest data.', [])
+            result = ai_mod.generate_weekly_summary('## MARKET DATA\nTest data.', [])
 
         return result, captured
 
@@ -192,17 +193,17 @@ class TestGenerateDailySummaryConditionsContext(unittest.TestCase):
         self.assertNotIn('Open your briefing by naming the current macro regime',
                          captured['user_prompt'])
 
-    def test_three_paragraph_instruction(self):
+    def test_week_in_review_instruction(self):
         result, captured = self._call_with_mocked_conditions(self.MOCK_CONDITIONS)
-        self.assertIn('3 paragraphs', captured['system_prompt'])
+        self.assertIn('## What to watch next week', captured['system_prompt'])
 
     def test_market_data_preserved(self):
         result, captured = self._call_with_mocked_conditions(self.MOCK_CONDITIONS)
         self.assertIn('## MARKET DATA', captured['user_prompt'])
 
-    def test_today_date_in_prompt(self):
+    def test_week_dates_in_prompt(self):
         result, captured = self._call_with_mocked_conditions(self.MOCK_CONDITIONS)
-        self.assertIn('Today is', captured['user_prompt'])
+        self.assertIn('The week under review runs', captured['user_prompt'])
 
 
 
