@@ -7,12 +7,12 @@ Aggregates market data, AI summaries, and user alerts into a comprehensive email
 
 from datetime import datetime, timedelta
 import pytz
-from flask import current_app
 from services.email_service import send_email
 from models.user import User
 from models.alert import AlertPreference, Alert
 from ai_summary import get_latest_summary
 from extensions import db
+from email_links import external_url, list_unsubscribe_headers, unsubscribe_url
 import logging
 
 logger = logging.getLogger(__name__)
@@ -229,7 +229,7 @@ def send_daily_briefing_to_user(user):
 
         eastern = pytz.timezone('US/Eastern')
         # Prepare template context
-        base_url = current_app.config['BASE_URL']
+        unsubscribe_link = unsubscribe_url(user, 'briefing')
         context = {
             'user': user,
             'briefing_date': datetime.now(eastern).strftime('%A, %B %d, %Y'),
@@ -241,8 +241,8 @@ def send_daily_briefing_to_user(user):
             'triggered_alerts': triggered_alerts,
             'include_portfolio': prefs.include_portfolio_analysis,
             'portfolio_analysis': portfolio_analysis,
-            'dashboard_url': base_url,
-            'unsubscribe_url': f"{base_url}/unsubscribe/{user.id}"
+            'dashboard_url': external_url('index'),
+            'unsubscribe_url': unsubscribe_link
         }
 
         # Send email
@@ -252,6 +252,7 @@ def send_daily_briefing_to_user(user):
             subject=subject,
             template_html='email/daily_briefing.html',
             template_txt='email/daily_briefing.txt',
+            extra_headers=list_unsubscribe_headers(unsubscribe_link),
             **context
         )
 

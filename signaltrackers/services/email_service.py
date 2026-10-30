@@ -13,7 +13,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def send_email(to, subject, template_html, template_txt, **context):
+def send_email(to, subject, template_html, template_txt, extra_headers=None, **context):
     """
     Send an email using Flask-Mail
 
@@ -22,6 +22,7 @@ def send_email(to, subject, template_html, template_txt, **context):
         subject: Email subject line
         template_html: Path to HTML template (relative to templates/)
         template_txt: Path to plain-text template (relative to templates/)
+        extra_headers: Optional dict of additional message headers
         **context: Template variables to pass to the templates
 
     Returns:
@@ -39,7 +40,8 @@ def send_email(to, subject, template_html, template_txt, **context):
     try:
         msg = Message(
             subject=subject,
-            recipients=[to] if isinstance(to, str) else to
+            recipients=[to] if isinstance(to, str) else to,
+            extra_headers=extra_headers
         )
 
         # Render templates with provided context
