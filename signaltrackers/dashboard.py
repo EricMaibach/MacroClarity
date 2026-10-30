@@ -2377,6 +2377,7 @@ def unsubscribe(email_type, token):
     GET only shows a confirmation page: mail scanners and link prefetchers
     follow GET links, so a GET must not change state. The POST from that page,
     or from a mail client's one-click List-Unsubscribe, turns the email off.
+    Flask also routes HEAD here, so gate on POST rather than on GET.
     """
     user_id = load_unsubscribe_token(token, email_type)
     user = db.session.get(User, user_id) if user_id else None
@@ -2384,7 +2385,7 @@ def unsubscribe(email_type, token):
         abort(404)
 
     label = UNSUBSCRIBE_TYPES[email_type]['label']
-    if request.method == 'GET':
+    if request.method != 'POST':
         return render_template('unsubscribe_confirm.html', email_type=label)
 
     # A user with no preferences row would get default (enabled) preferences

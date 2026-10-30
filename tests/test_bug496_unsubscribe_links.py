@@ -266,6 +266,16 @@ class TestTokens:
         assert _prefs(user.id).daily_briefing_enabled is True
         assert _prefs(user.id).alerts_enabled is True
 
+    @pytest.mark.parametrize('email_type', ['briefing', 'alerts'])
+    @pytest.mark.parametrize('method', ['get', 'head', 'options'])
+    def test_safe_methods_do_not_unsubscribe(self, client, method, email_type):
+        # Bug #498: Flask routes HEAD to the view, and link checkers send it.
+        user = _make_user()
+        url = email_links.unsubscribe_url(user, email_type)
+        assert getattr(client, method)(_path(url)).status_code == 200
+        assert _prefs(user.id).daily_briefing_enabled is True
+        assert _prefs(user.id).alerts_enabled is True
+
     def test_double_post_is_idempotent(self, client):
         user = _make_user()
         url = email_links.unsubscribe_url(user, 'alerts')
