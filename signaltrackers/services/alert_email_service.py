@@ -7,10 +7,10 @@ Supports single alerts and batching multiple alerts into one email.
 
 from datetime import datetime
 import pytz
-from flask import current_app
 from services.email_service import send_email
 from models.alert import Alert
 from extensions import db
+from email_links import external_url, list_unsubscribe_headers, unsubscribe_url
 import logging
 
 logger = logging.getLogger(__name__)
@@ -119,8 +119,7 @@ def send_alert_notification(user, alerts):
                 'threshold_value_formatted': format_metric_value(alert.threshold_value),
             })
 
-        # Get base URL from config
-        base_url = current_app.config.get('BASE_URL', 'http://localhost:5000')
+        unsubscribe_link = unsubscribe_url(user, 'alerts')
 
         eastern = pytz.timezone('US/Eastern')
         # Prepare template context
@@ -131,10 +130,10 @@ def send_alert_notification(user, alerts):
             'header_bg_color': colors['header_bg'],
             'header_text_color': colors['header_text'],
             'border_color': colors['border'],
-            'dashboard_url': f'{base_url}/',
-            'alert_history_url': f'{base_url}/alerts/history',
-            'settings_url': f'{base_url}/settings/alerts',
-            'unsubscribe_url': f'{base_url}/alerts/unsubscribe/{user.id}'
+            'dashboard_url': external_url('index'),
+            'alert_history_url': external_url('alert_history'),
+            'settings_url': external_url('settings_alerts'),
+            'unsubscribe_url': unsubscribe_link
         }
 
         # Send email
@@ -146,6 +145,7 @@ def send_alert_notification(user, alerts):
             subject=subject,
             template_html='email/alert_notification.html',
             template_txt='email/alert_notification.txt',
+            extra_headers=list_unsubscribe_headers(unsubscribe_link),
             **context
         )
 

@@ -47,6 +47,7 @@ from portfolio import (
 )
 from config import get_config
 from extensions import init_extensions, db, limiter, csrf
+from email_links import UNSUBSCRIBE_TYPES, load_unsubscribe_token
 from models import User
 from scheduler import init_scheduler as init_apscheduler, shutdown_scheduler
 from recession_probability import get_recession_probability, update_recession_probability
@@ -2368,35 +2369,31 @@ def save_alert_settings():
         }), 500
 
 
-@app.route('/unsubscribe/alerts/<int:user_id>')
-def unsubscribe_alerts(user_id):
-    """Unsubscribe from alert emails."""
-    from models.user import User
+@app.route('/unsubscribe/<any(briefing, alerts):email_type>/<token>', methods=['GET', 'POST'])
+@csrf.exempt  # RFC 8058 one-click POSTs carry no CSRF token; the signed token authenticates
+def unsubscribe(email_type, token):
+    """Unsubscribe from one email type via the signed link in that email.
 
-    user = User.query.get_or_404(user_id)
-    prefs = user.alert_preferences
+    GET only shows a confirmation page: mail scanners and link prefetchers
+    follow GET links, so a GET must not change state. The POST from that page,
+    or from a mail client's one-click List-Unsubscribe, turns the email off.
+    """
+    user_id = load_unsubscribe_token(token, email_type)
+    user = db.session.get(User, user_id) if user_id else None
+    if user is None:
+        abort(404)
 
-    if prefs:
-        prefs.alerts_enabled = False
-        db.session.commit()
+    label = UNSUBSCRIBE_TYPES[email_type]['label']
+    if request.method == 'GET':
+        return render_template('unsubscribe_confirm.html', email_type=label)
 
-    return render_template('unsubscribe_success.html', email_type='alert notifications')
+    # A user with no preferences row would get default (enabled) preferences
+    # later, so create the row now to record the opt-out.
+    prefs = user.create_default_alert_preferences()
+    setattr(prefs, UNSUBSCRIBE_TYPES[email_type]['preference'], False)
+    db.session.commit()
 
-
-@app.route('/unsubscribe/briefing/<user_id>')
-def unsubscribe_briefing(user_id):
-    """Unsubscribe from daily briefing emails."""
-    from models.user import User
-    from models.alert import AlertPreference
-
-    user = User.query.get_or_404(user_id)
-    prefs = user.alert_preferences
-
-    if prefs:
-        prefs.daily_briefing_enabled = False
-        db.session.commit()
-
-    return render_template('unsubscribe_success.html', email_type='daily briefing')
+    return render_template('unsubscribe_success.html', email_type=label)
 
 
 @app.route('/api/dashboard')
