@@ -15,8 +15,10 @@ class AIUsageRecord(db.Model):
     __tablename__ = 'ai_usage_records'
 
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.String(36), db.ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
-    interaction_type = db.Column(db.String(30), nullable=False)  # chatbot, portfolio_analysis, section_ai, sentence_drill_in
+    # NULL for system calls (the scheduled weekly review), which belong to no
+    # user and must not count against anyone's quota.
+    user_id = db.Column(db.String(36), db.ForeignKey('users.id', ondelete='CASCADE'), nullable=True)
+    interaction_type = db.Column(db.String(30), nullable=False)  # see VALID_INTERACTION_TYPES
     timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     input_tokens = db.Column(db.Integer, nullable=True)
     output_tokens = db.Column(db.Integer, nullable=True)
@@ -36,7 +38,10 @@ class AIUsageRecord(db.Model):
     # Relationship
     user = db.relationship('User', backref=db.backref('ai_usage_records', lazy='dynamic'))
 
-    VALID_INTERACTION_TYPES = {'chatbot', 'portfolio_analysis', 'section_ai', 'sentence_drill_in'}
+    VALID_INTERACTION_TYPES = {
+        'chatbot', 'portfolio_analysis', 'section_ai', 'sentence_drill_in',
+        'scheduled_briefing',
+    }
 
     def __repr__(self):
         return f'<AIUsageRecord {self.id} user={self.user_id} type={self.interaction_type}>'

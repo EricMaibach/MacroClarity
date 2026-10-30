@@ -1,5 +1,8 @@
 """
-Tests for US-259.3: News data pipeline — fetch, store, and summarize daily macro news.
+Tests for US-259.3: News data pipeline — fetch, store, and summarize macro news.
+
+US-490.1 split the pipeline: run_news_pipeline() fetches and stores articles
+daily with no AI calls; summarize_week_news() summarizes the week's articles.
 
 These are static source-analysis tests. No live Tavily calls, no Docker required.
 """
@@ -40,7 +43,15 @@ def load_news_pipeline_module():
     # Provide stubs for optional deps
     sys.modules.setdefault('pytz', __import__('pytz'))
     spec.loader.exec_module(mod)
+    # Keep these tests off the checkout's real weekly-review file; the weekly
+    # review lookup is covered in test_us4901_weekly_scheduler.py.
+    mod.NEWS_REVIEWS_FILE = Path('/nonexistent/news_reviews.json')
     return mod
+
+
+def _today():
+    """Today in ET, as the pipeline keys records (the container clock is UTC)."""
+    return date.fromisoformat(load_news_pipeline_module()._today())
 
 
 # ---------------------------------------------------------------------------
@@ -250,25 +261,29 @@ class TestAISummary:
                'no bullet' in NEWS_PIPELINE_SOURCE.lower() or \
                'not use bullet' in NEWS_PIPELINE_SOURCE.lower()
 
-    def test_summary_stored_in_record(self):
-        """run_news_pipeline must store 'summary' key in the date record."""
+    def test_daily_record_stores_articles_without_summary(self):
+        """The daily run stores articles only; it never calls the summarizers (US-490.1)."""
         mod = load_news_pipeline_module()
+        article = {'headline': 'h', 'url': 'u', 'source': 's',
+                   'timestamp': 't', 'raw_content': 'r', 'topic': 'macro'}
         with patch.dict(os.environ, {'TAVILY_API_KEY': 'testkey'}), \
-             patch.object(mod, '_fetch_topic', return_value=[]), \
-             patch.object(mod, '_generate_cross_market_summary', return_value='Test summary'), \
+             patch.object(mod, '_fetch_topic', return_value=[article]), \
+             patch.object(mod, '_generate_cross_market_summary') as cross, \
+             patch.object(mod, '_generate_all_topic_summaries') as topics, \
+             patch.object(mod, '_load_cache', return_value={}), \
              patch.object(mod, '_save_cache') as mock_save:
 
             mod.run_news_pipeline()
 
-        assert mock_save.called
+        cross.assert_not_called()
+        topics.assert_not_called()
         saved_data = mock_save.call_args[0][0]
-        today = date.today().isoformat()
-        assert today in saved_data
-        assert 'summary' in saved_data[today]
+        record = saved_data[_today().isoformat()]
+        assert record['articles']
+        assert record.get('summary') is None
 
     def test_single_ai_call_not_per_topic(self):
-        """Only one summarization call should be made per pipeline run (not one per topic)."""
-        # Verify there is one call to _generate_cross_market_summary, not 6
+        """One cross-market summarization call per weekly run (not one per topic)."""
         mod = load_news_pipeline_module()
         call_count = []
 
@@ -276,15 +291,18 @@ class TestAISummary:
             call_count.append(1)
             return 'summary text'
 
-        with patch.dict(os.environ, {'TAVILY_API_KEY': 'testkey'}), \
-             patch.object(mod, '_fetch_topic', return_value=[
-                 {'headline': 'h', 'url': 'u', 'source': 's',
-                  'timestamp': 't', 'raw_content': 'r', 'topic': 'macro'}
-             ]), \
-             patch.object(mod, '_generate_cross_market_summary', side_effect=mock_summarize), \
-             patch.object(mod, '_save_cache'):
+        day = _today().isoformat()
+        cache = {day: {'date': day, 'articles': [
+            {'headline': 'h', 'url': f'u{i}', 'source': 's',
+             'timestamp': 't', 'raw_content': 'r', 'topic': topic}
+            for i, topic in enumerate(['macro', 'rates', 'credit'])]}}
 
-            mod.run_news_pipeline()
+        with patch.object(mod, '_load_cache', return_value=cache), \
+             patch.object(mod, '_generate_cross_market_summary', side_effect=mock_summarize), \
+             patch.object(mod, '_generate_all_topic_summaries', return_value={}), \
+             patch.object(mod, '_save_reviews'):
+
+            mod.summarize_week_news(_today(), _today())
 
         assert len(call_count) == 1, f"Expected 1 summarization call, got {len(call_count)}"
 
@@ -310,7 +328,7 @@ class TestStorageLayer:
             mod.run_news_pipeline()
 
         saved = mock_save.call_args[0][0]
-        today = date.today().isoformat()
+        today = _today().isoformat()
         assert today in saved
         # Key format: YYYY-MM-DD
         assert len(today) == 10
@@ -319,7 +337,7 @@ class TestStorageLayer:
     def test_one_record_per_date_overwrites(self):
         """A second run on the same day must overwrite, not append."""
         mod = load_news_pipeline_module()
-        today = date.today().isoformat()
+        today = _today().isoformat()
         existing = {
             today: {
                 'date': today,
@@ -349,7 +367,8 @@ class TestStorageLayer:
         # Should still have exactly one entry for today (overwritten, not duplicated)
         today_records = [k for k in final.keys() if k == today]
         assert len(today_records) == 1
-        assert final[today]['summary'] == 'new summary'
+        # The fake fetch returns the same article for each topic.
+        assert final[today]['articles'] == [fake_article] * len(mod.TOPIC_QUERIES)
 
     def test_90_day_pruning_logic_present(self):
         """Source must contain 90-day pruning logic."""
@@ -360,8 +379,8 @@ class TestStorageLayer:
     def test_pruning_removes_old_entries(self):
         """_prune must remove entries older than RETENTION_DAYS."""
         mod = load_news_pipeline_module()
-        old_date = (date.today() - timedelta(days=91)).isoformat()
-        recent_date = date.today().isoformat()
+        old_date = (_today() - timedelta(days=91)).isoformat()
+        recent_date = _today().isoformat()
         data = {
             old_date: {'date': old_date},
             recent_date: {'date': recent_date},
@@ -395,7 +414,7 @@ class TestStorageLayer:
 class TestGetStoredNews:
     def test_returns_today_record_when_present(self):
         mod = load_news_pipeline_module()
-        today = date.today().isoformat()
+        today = _today().isoformat()
         cache = {today: {'date': today, 'summary': 'today summary', 'articles': []}}
         with patch.object(mod, '_load_cache', return_value=cache):
             result = mod.get_stored_news()
@@ -404,7 +423,7 @@ class TestGetStoredNews:
 
     def test_returns_recent_stale_record_within_window(self):
         mod = load_news_pipeline_module()
-        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        yesterday = (_today() - timedelta(days=1)).isoformat()
         cache = {yesterday: {'date': yesterday, 'summary': 'yesterday', 'articles': []}}
         with patch.object(mod, '_load_cache', return_value=cache):
             result = mod.get_stored_news(max_stale_days=7)
@@ -413,7 +432,7 @@ class TestGetStoredNews:
 
     def test_returns_none_when_record_too_stale(self):
         mod = load_news_pipeline_module()
-        old = (date.today() - timedelta(days=8)).isoformat()
+        old = (_today() - timedelta(days=8)).isoformat()
         cache = {old: {'date': old, 'summary': 'old', 'articles': []}}
         with patch.object(mod, '_load_cache', return_value=cache):
             result = mod.get_stored_news(max_stale_days=7)
@@ -433,8 +452,8 @@ class TestGetStoredNews:
 
     def test_returns_most_recent_when_multiple_stale_records(self):
         mod = load_news_pipeline_module()
-        d1 = (date.today() - timedelta(days=3)).isoformat()
-        d2 = (date.today() - timedelta(days=5)).isoformat()
+        d1 = (_today() - timedelta(days=3)).isoformat()
+        d2 = (_today() - timedelta(days=5)).isoformat()
         cache = {
             d1: {'date': d1, 'summary': 'newer', 'articles': []},
             d2: {'date': d2, 'summary': 'older', 'articles': []},
@@ -486,7 +505,7 @@ class TestGracefulDegradation:
             mod.run_news_pipeline()
 
         assert saved, "Cache was not saved when summary generation returned None"
-        today = date.today().isoformat()
+        today = _today().isoformat()
         assert today in saved[0]
         assert len(saved[0][today]['articles']) > 0
 
@@ -564,29 +583,28 @@ class TestDashboardIntegration:
         surrounding = DASHBOARD_SOURCE[max(0, idx - 200):idx + 200]
         assert 'try' in surrounding or 'except' in surrounding
 
-    def test_news_pipeline_called_before_briefing_generation(self):
-        """News pipeline must be called before generate_crypto_summary call inside run_data_collection."""
-        # Find run_data_collection body (search from its def onwards)
-        func_start = DASHBOARD_SOURCE.find('def run_data_collection()')
-        assert func_start >= 0, "run_data_collection not found in dashboard.py"
-        body = DASHBOARD_SOURCE[func_start:]
-        news_idx = body.find('run_news_pipeline')
-        # Find the call site (not the import) by looking for the function call pattern
-        # The call will be after the import statement
-        import_idx = body.find('from news_pipeline import')
-        crypto_call_idx = body.find('generate_crypto_summary(')
-        assert news_idx >= 0, "run_news_pipeline not found in run_data_collection body"
-        assert crypto_call_idx >= 0, "generate_crypto_summary call not found in run_data_collection body"
-        assert news_idx < crypto_call_idx, (
-            "run_news_pipeline() must appear before generate_crypto_summary() "
-            "in run_data_collection()"
-        )
+    @staticmethod
+    def _body(start, end):
+        return DASHBOARD_SOURCE[DASHBOARD_SOURCE.index(start):DASHBOARD_SOURCE.index(end)]
 
-    def test_news_pipeline_called_before_general_summary(self):
-        """News pipeline must be called before generate_daily_summary inside run_data_collection."""
-        func_start = DASHBOARD_SOURCE.find('def run_data_collection()')
-        body = DASHBOARD_SOURCE[func_start:]
-        news_idx = body.find('run_news_pipeline')
+    def test_news_fetch_runs_in_daily_data_phase(self):
+        """The daily data phase fetches and stores news (no summarizing, US-490.1)."""
+        body = self._body('def _run_data_phase(', 'def run_data_collection(')
+        assert 'run_news_pipeline()' in body
+        assert 'summarize_week_news' not in body
+
+    def test_news_summary_runs_before_briefing_generation(self):
+        """The weekly review summarizes the week's news before the section briefings."""
+        body = self._body('def run_weekly_ai_review(', 'def api_reload_data(')
+        news_idx = body.find('summarize_week_news(')
+        crypto_call_idx = body.find('generate_crypto_summary(')
+        assert news_idx >= 0, "summarize_week_news not found in run_weekly_ai_review body"
+        assert crypto_call_idx >= 0, "generate_crypto_summary call not found in run_weekly_ai_review body"
+        assert news_idx < crypto_call_idx
+
+    def test_news_summary_runs_before_general_summary(self):
+        body = self._body('def run_weekly_ai_review(', 'def api_reload_data(')
+        news_idx = body.find('summarize_week_news(')
         daily_idx = body.find('generate_daily_summary(')
         assert news_idx >= 0
         assert daily_idx >= 0

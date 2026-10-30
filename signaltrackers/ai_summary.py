@@ -28,6 +28,8 @@ except ImportError:
     ANTHROPIC_AVAILABLE = False
     anthropic = None
 
+import briefing_week
+
 from web_search import (
     search_web, search_financial_news, is_tavily_configured,
     SEARCH_FUNCTION_DEFINITION, execute_search_function
@@ -176,9 +178,15 @@ def call_ai_with_tools(client, system_prompt, user_prompt, max_tokens=16000, log
     _dump_prompt_to_file(log_prefix, provider, system_prompt, user_prompt, max_tokens)
 
     if provider == 'anthropic':
-        return _call_anthropic_with_tools(client, system_prompt, user_prompt, max_tokens, log_prefix)
+        result = _call_anthropic_with_tools(client, system_prompt, user_prompt, max_tokens, log_prefix)
     else:
-        return _call_openai_with_tools(client, system_prompt, user_prompt, max_tokens, log_prefix)
+        result = _call_openai_with_tools(client, system_prompt, user_prompt, max_tokens, log_prefix)
+
+    # Scheduled weekly-run calls are metered here, once per call (tool-loop
+    # turns are already summed into result['usage']). User-triggered calls are
+    # metered by their routes; outside the scheduled run this is a no-op.
+    briefing_week.meter_ai_call(result.get('usage'), result.get('model'))
+    return result
 
 
 def _call_openai_with_tools(client, system_prompt, user_prompt, max_tokens, log_prefix):
@@ -518,7 +526,8 @@ def save_summary(date_str, summary_text, web_search_used=False, news_context=Non
         "generated_at": datetime.now(eastern).isoformat(),
         "summary": summary_text,
         "web_search_used": web_search_used,
-        "news_context": news_context[:500] if news_context else None  # Store snippet of news used
+        "news_context": news_context[:500] if news_context else None,  # Store snippet of news used
+        **briefing_week.record_metadata(),
     })
 
     # Keep last 90 days of summaries
@@ -1055,7 +1064,8 @@ def get_summary_for_display():
             'date': summary['date'],
             'generated_at': summary['generated_at'],
             'summary': summary['summary'],
-            'web_search_used': summary.get('web_search_used', False)
+            'web_search_used': summary.get('web_search_used', False),
+            **briefing_week.display_fields(summary),
         }
     return None
 
@@ -1113,7 +1123,8 @@ def save_crypto_summary(date_str, summary_text, web_search_used=False, news_cont
         "generated_at": datetime.now(eastern).isoformat(),
         "summary": summary_text,
         "web_search_used": web_search_used,
-        "news_context": news_context[:500] if news_context else None
+        "news_context": news_context[:500] if news_context else None,
+        **briefing_week.record_metadata(),
     })
 
     # Keep last 90 days of summaries
@@ -1268,7 +1279,8 @@ def get_crypto_summary_for_display():
             'date': summary['date'],
             'generated_at': summary['generated_at'],
             'summary': summary['summary'],
-            'web_search_used': summary.get('web_search_used', False)
+            'web_search_used': summary.get('web_search_used', False),
+            **briefing_week.display_fields(summary),
         }
     return None
 
@@ -1326,7 +1338,8 @@ def save_equity_summary(date_str, summary_text, web_search_used=False, news_cont
         "generated_at": datetime.now(eastern).isoformat(),
         "summary": summary_text,
         "web_search_used": web_search_used,
-        "news_context": news_context[:500] if news_context else None
+        "news_context": news_context[:500] if news_context else None,
+        **briefing_week.record_metadata(),
     })
 
     # Keep last 90 days of summaries
@@ -1481,7 +1494,8 @@ def get_equity_summary_for_display():
             'date': summary['date'],
             'generated_at': summary['generated_at'],
             'summary': summary['summary'],
-            'web_search_used': summary.get('web_search_used', False)
+            'web_search_used': summary.get('web_search_used', False),
+            **briefing_week.display_fields(summary),
         }
     return None
 
@@ -1521,7 +1535,8 @@ def save_rates_summary(date_str, summary_text, web_search_used=False, news_conte
         "generated_at": datetime.now(eastern).isoformat(),
         "summary": summary_text,
         "web_search_used": web_search_used,
-        "news_context": news_context[:500] if news_context else None
+        "news_context": news_context[:500] if news_context else None,
+        **briefing_week.record_metadata(),
     }
 
     if existing_idx is not None:
@@ -1697,7 +1712,8 @@ def get_rates_summary_for_display():
             'date': summary['date'],
             'generated_at': summary['generated_at'],
             'summary': summary['summary'],
-            'web_search_used': summary.get('web_search_used', False)
+            'web_search_used': summary.get('web_search_used', False),
+            **briefing_week.display_fields(summary),
         }
     return None
 
@@ -1737,7 +1753,8 @@ def save_dollar_summary(date_str, summary_text, web_search_used=False, news_cont
         "generated_at": datetime.now(eastern).isoformat(),
         "summary": summary_text,
         "web_search_used": web_search_used,
-        "news_context": news_context[:500] if news_context else None
+        "news_context": news_context[:500] if news_context else None,
+        **briefing_week.record_metadata(),
     }
 
     if existing_idx is not None:
@@ -1913,7 +1930,8 @@ def get_dollar_summary_for_display():
             'date': summary['date'],
             'generated_at': summary['generated_at'],
             'summary': summary['summary'],
-            'web_search_used': summary.get('web_search_used', False)
+            'web_search_used': summary.get('web_search_used', False),
+            **briefing_week.display_fields(summary),
         }
     return None
 
@@ -1952,7 +1970,8 @@ def save_credit_summary(date_str, summary_text, web_search_used=False, news_cont
         "generated_at": datetime.now(eastern).isoformat(),
         "summary": summary_text,
         "web_search_used": web_search_used,
-        "news_context": news_context[:500] if news_context else None
+        "news_context": news_context[:500] if news_context else None,
+        **briefing_week.record_metadata(),
     }
 
     if existing_idx is not None:
@@ -2119,7 +2138,8 @@ def get_credit_summary_for_display():
             'date': summary['date'],
             'generated_at': summary['generated_at'],
             'summary': summary['summary'],
-            'web_search_used': summary.get('web_search_used', False)
+            'web_search_used': summary.get('web_search_used', False),
+            **briefing_week.display_fields(summary),
         }
     return None
 

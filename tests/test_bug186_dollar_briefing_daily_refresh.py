@@ -1,7 +1,7 @@
 """
 Static verification tests for Bug #186: Dollar briefing missing from automated daily refresh.
 
-These tests verify that run_data_collection() in dashboard.py generates the Dollar &
+These tests verify that run_weekly_ai_review() in dashboard.py generates the Dollar &
 Currency AI briefing in the correct position (after rates, before daily summary) and
 that the consumer code in ai_summary.py and dashboard.py remains intact.
 """
@@ -22,12 +22,12 @@ def read_source(filename):
 
 
 # ---------------------------------------------------------------------------
-# Structural tests — dollar step present in run_data_collection()
+# Structural tests — dollar step present in run_weekly_ai_review()
 # ---------------------------------------------------------------------------
 
 
 class TestDollarStepPresent(unittest.TestCase):
-    """Dollar briefing step must exist inside run_data_collection()."""
+    """Dollar briefing step must exist inside run_weekly_ai_review()."""
 
     @classmethod
     def setUpClass(cls):
@@ -62,7 +62,10 @@ class TestDollarStepOrdering(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.src = read_source('dashboard.py')
+        # Scheduled briefings run in the weekly review since US-490.1.
+        src = read_source('dashboard.py')
+        start = src.index('def run_weekly_ai_review(')
+        cls.src = src[start:src.index('\ndef ', start + 1)]
 
     def _find_pos(self, needle):
         pos = self.src.find(needle)
@@ -73,13 +76,13 @@ class TestDollarStepOrdering(unittest.TestCase):
         rates_pos = self._find_pos('Generating Rates AI summary...')
         dollar_pos = self._find_pos('Generating Dollar AI summary...')
         self.assertGreater(dollar_pos, rates_pos,
-                           'Dollar step must appear AFTER Rates step in run_data_collection()')
+                           'Dollar step must appear AFTER Rates step in run_weekly_ai_review()')
 
     def test_dollar_step_before_daily_summary_step(self):
         dollar_pos = self._find_pos('Generating Dollar AI summary...')
         daily_pos = self._find_pos('Generating AI daily summary...')
         self.assertGreater(daily_pos, dollar_pos,
-                           'Dollar step must appear BEFORE Daily Summary step in run_data_collection()')
+                           'Dollar step must appear BEFORE Daily Summary step in run_weekly_ai_review()')
 
     def test_dollar_step_after_equity_step(self):
         equity_pos = self._find_pos('Generating Equity Markets AI summary...')

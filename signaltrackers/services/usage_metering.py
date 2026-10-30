@@ -1,7 +1,8 @@
 """
 Usage Metering Service
 
-Records AI interaction usage data (tokens, cost) for registered users.
+Records AI interaction usage data (tokens, cost) for registered users and for
+system calls made by the scheduled weekly review (user_id NULL).
 Metering is silent and failure-safe — errors are logged but never break AI features.
 """
 
@@ -154,7 +155,8 @@ def record_usage(user_id, interaction_type, model_name,
     """Record an AI usage metering entry. Fails silently — never breaks AI features.
 
     Args:
-        user_id: The authenticated user's ID (required, non-null).
+        user_id: The authenticated user's ID, or None for a system call (the
+            scheduled weekly review), which belongs to no user.
         interaction_type: One of AIUsageRecord.VALID_INTERACTION_TYPES.
         model_name: The AI model used (e.g., 'claude-sonnet-4-6').
         input_tokens: Number of input/prompt tokens (nullable).

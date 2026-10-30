@@ -47,6 +47,7 @@ from portfolio import (
 )
 from config import get_config
 from extensions import init_extensions, db, limiter, csrf
+import briefing_week
 from email_links import UNSUBSCRIBE_TYPES, load_unsubscribe_token
 from models import User
 from scheduler import init_scheduler as init_apscheduler, shutdown_scheduler
@@ -233,7 +234,8 @@ def init_scheduler():
     # Initialize the APScheduler with all configured jobs (alerts, emails, etc.)
     scheduler = init_apscheduler(app)
 
-    # Add the data refresh job to the scheduler
+    # Daily data refresh: market data, divergence, recession probability,
+    # market conditions and the news article fetch. No AI calls.
     eastern = pytz.timezone('US/Eastern')
     scheduler.add_job(
         scheduled_data_refresh,
@@ -243,7 +245,29 @@ def init_scheduler():
         name='Daily Data Refresh'
     )
 
-    print(f"Scheduler started. Next refresh: {scheduler.get_job('daily_refresh').next_run_time}")
+    # Weekly AI review: every scheduled AI call, once a week after Friday's
+    # close (US-490.1). Runs on holiday Fridays too; the refresh it waits on
+    # picks up the latest available close. The generous grace time covers a
+    # scheduler stall; a restart across the trigger is covered by the
+    # catch-up below, because the job store is in memory.
+    scheduler.add_job(
+        scheduled_weekly_review,
+        CronTrigger(
+            day_of_week='fri',
+            hour=briefing_week.WEEKLY_RUN_TIME.hour,
+            minute=briefing_week.WEEKLY_RUN_TIME.minute,
+            timezone=briefing_week.ET,
+        ),
+        id='weekly_ai_review',
+        replace_existing=True,
+        name='Weekly AI Review',
+        misfire_grace_time=WEEKLY_MISFIRE_GRACE_SECONDS,
+    )
+
+    _schedule_weekly_catch_up()
+
+    print(f"Scheduler started. Next refresh: {scheduler.get_job('daily_refresh').next_run_time}, "
+          f"next weekly review: {scheduler.get_job('weekly_ai_review').next_run_time}")
 
     # Ensure scheduler shuts down on exit
     atexit.register(shutdown_scheduler)
@@ -251,15 +275,176 @@ def init_scheduler():
     return scheduler
 
 
+# ---------------------------------------------------------------------------
+# Data refresh / weekly AI review orchestration (US-490.1)
+# ---------------------------------------------------------------------------
+#
+# One lock serializes the data refresh (daily job and the Reload Data button)
+# and the weekly AI review. Both write the same data files, reload_status
+# describes whichever is running, and the weekly review blocks on the lock so
+# it always starts after Friday's refresh has finished, however long that
+# takes. Gunicorn runs a single worker (-w 1), so a process-local lock covers
+# every entry point.
+_pipeline_lock = threading.Lock()
+
+# ET date of the last data refresh that completed. The weekly review re-runs
+# the refresh itself when this isn't today (Friday's refresh failed, or the
+# app restarted since), so it never writes a review from stale data.
+_last_data_refresh = {'date': None}
+
+WEEKLY_REVIEW_STATE_FILE = DATA_DIR / 'weekly_review_state.json'
+WEEKLY_LOCK_TIMEOUT_SECONDS = 60 * 60
+WEEKLY_MISFIRE_GRACE_SECONDS = 6 * 60 * 60
+WEEKLY_RETRY_DELAY = timedelta(minutes=30)
+WEEKLY_MAX_ATTEMPTS = 3
+DATA_REFRESH_LOCK_TIMEOUT_SECONDS = 30 * 60
+
+
+def _load_weekly_review_state():
+    try:
+        with open(WEEKLY_REVIEW_STATE_FILE) as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_weekly_review_state(week_end, published_at):
+    DATA_DIR.mkdir(exist_ok=True)
+    with open(WEEKLY_REVIEW_STATE_FILE, 'w') as f:
+        json.dump({
+            'week_end': week_end.isoformat(),
+            'published_at': published_at.isoformat(),
+        }, f, indent=2)
+
+
+def weekly_review_due(now=None):
+    """(week_start, week_end) of a scheduled review that should exist but doesn't.
+
+    Returns None when the latest Friday run has already been published, or when
+    it is too late to publish it: catch-up stops at the end of Sunday, because
+    from Monday the reader has moved into a new week.
+    """
+    now = briefing_week.to_et(now) if now else briefing_week.now_et()
+    due = briefing_week.latest_due_run(now)
+    if now.date() > due.date() + timedelta(days=2):
+        return None
+    week_start, week_end = briefing_week.trading_week(due.date())
+    if _load_weekly_review_state().get('week_end') == week_end.isoformat():
+        return None
+    return week_start, week_end
+
+
+def _schedule_weekly_catch_up():
+    """Run a missed weekly review shortly after startup.
+
+    The job store is in memory, so an app that was down at Friday's trigger
+    would otherwise skip the whole week. Disabled with
+    WEEKLY_REVIEW_CATCH_UP=false (the test suite does this, because importing
+    dashboard starts the scheduler).
+    """
+    if os.environ.get('WEEKLY_REVIEW_CATCH_UP', 'true').lower() in ('0', 'false', 'no', 'off'):
+        return
+    if weekly_review_due() is None:
+        return
+    run_at = datetime.now(pytz.utc) + timedelta(minutes=2)
+    scheduler.add_job(
+        scheduled_weekly_review,
+        'date',
+        run_date=run_at,
+        id='weekly_ai_review_catch_up',
+        replace_existing=True,
+        name='Weekly AI Review (catch-up)',
+    )
+    print(f"Weekly review for the last completed week is missing; catch-up run at {run_at}")
+
+
+def _schedule_weekly_retry(attempt):
+    if scheduler is None or attempt >= WEEKLY_MAX_ATTEMPTS:
+        print(f"[Weekly Review] Giving up after {attempt} attempt(s)")
+        return
+    run_at = datetime.now(pytz.utc) + WEEKLY_RETRY_DELAY
+    scheduler.add_job(
+        scheduled_weekly_review,
+        'date',
+        run_date=run_at,
+        args=[attempt + 1],
+        id='weekly_ai_review_retry',
+        replace_existing=True,
+        name='Weekly AI Review (retry)',
+    )
+    print(f"[Weekly Review] Retry {attempt + 1}/{WEEKLY_MAX_ATTEMPTS} scheduled for {run_at}")
+
+
+def _run_holding_lock(fn):
+    """Thread target: run `fn` and release the lock the caller acquired."""
+    try:
+        fn()
+    finally:
+        _pipeline_lock.release()
+
+
 def scheduled_data_refresh():
-    """Background job to refresh all data and AI briefings."""
+    """Background job: daily data refresh. Makes no AI calls."""
     print(f"[{datetime.now()}] Starting scheduled data refresh...")
-
-    # Use the existing run_data_collection function
-    # which handles all data collection and AI summary generation
-    run_data_collection()
-
+    if not _pipeline_lock.acquire(timeout=DATA_REFRESH_LOCK_TIMEOUT_SECONDS):
+        print("Scheduled data refresh skipped: another pipeline run held the lock")
+        return
+    try:
+        run_data_collection()
+    finally:
+        _pipeline_lock.release()
     print(f"[{datetime.now()}] Scheduled data refresh completed.")
+
+
+def scheduled_weekly_review(attempt=1):
+    """Background job: the weekly AI review, after Friday's close.
+
+    Idempotent: a review already published for the week is never re-run, so a
+    restart (or the catch-up job) cannot produce a second set of AI calls.
+
+    If the data refresh it depends on fails, the AI run is skipped and retried
+    later (up to WEEKLY_MAX_ATTEMPTS). A review is never written from stale data.
+    """
+    week = weekly_review_due()
+    if week is None:
+        print("[Weekly Review] Already published for this week (or too late to catch up); skipping")
+        return
+    week_start, week_end = week
+
+    # Blocks behind the 17:30 refresh (or a manual reload) until it finishes.
+    if not _pipeline_lock.acquire(timeout=WEEKLY_LOCK_TIMEOUT_SECONDS):
+        print("[Weekly Review] Timed out waiting for the running pipeline")
+        _schedule_weekly_retry(attempt)
+        return
+
+    try:
+        _begin_pipeline_run('Weekly review: checking market data...')
+        today = briefing_week.now_et().date()
+        if _last_data_refresh['date'] != today:
+            try:
+                _run_data_phase()
+            except Exception as e:
+                _fail_pipeline_run(e)
+                print(f"[Weekly Review] Data refresh failed, AI run skipped: {e}")
+                _schedule_weekly_retry(attempt)
+                return
+
+        with app.app_context(), briefing_week.scheduled_run(week_start, week_end):
+            succeeded = run_weekly_ai_review(week_start, week_end)
+
+        if succeeded == 0:
+            _fail_pipeline_run(Exception('Every weekly AI step failed'))
+            _schedule_weekly_retry(attempt)
+            return
+
+        _save_weekly_review_state(week_end, briefing_week.now_et())
+        reload_status['success'] = True
+        reload_status['status'] = 'Complete!'
+        print(f"[Weekly Review] Published week {week_start} to {week_end} "
+              f"({succeeded} step(s) succeeded)")
+    finally:
+        reload_status['in_progress'] = False
+        _pipeline_lock.release()
 
 
 def get_scheduler_status():
@@ -270,19 +455,38 @@ def get_scheduler_status():
             'message': 'Scheduler not initialized'
         }
 
-    job = scheduler.get_job('daily_refresh')
-    if job:
+    schedules = {
+        'daily_refresh': 'Daily at 5:30 PM Eastern (Mon-Fri) — market data and news, no AI',
+        'weekly_ai_review': 'Weekly on Friday at 6:00 PM Eastern — AI week in review',
+    }
+    jobs = []
+    for job_id, description in schedules.items():
+        job = scheduler.get_job(job_id)
+        if job:
+            jobs.append({
+                'id': job_id,
+                'job_name': job.name,
+                'next_run': job.next_run_time.isoformat() if job.next_run_time else None,
+                'schedule': description,
+            })
+
+    if not jobs:
         return {
             'enabled': True,
-            'next_run': job.next_run_time.isoformat() if job.next_run_time else None,
-            'job_name': job.name,
-            'schedule': 'Daily at 5:30 PM Eastern (Mon-Fri)'
+            'next_run': None,
+            'jobs': [],
+            'message': 'No scheduled job found'
         }
 
+    # Top-level fields describe the daily refresh, as before this change, so
+    # existing readers keep working; `jobs` lists both.
+    primary = jobs[0]
     return {
         'enabled': True,
-        'next_run': None,
-        'message': 'No scheduled job found'
+        'next_run': primary['next_run'],
+        'job_name': primary['job_name'],
+        'schedule': primary['schedule'],
+        'jobs': jobs,
     }
 
 
@@ -2242,6 +2446,8 @@ def news():
         summary_date=summary_date,
         is_stale=is_stale,
         stale_date=stale_date,
+        # Week fields for the weekly framing (US-490.4 renders them)
+        news_week=briefing_week.display_fields(stored) if stored else None,
         extract_domain=extract_domain,
     )
 
@@ -2706,199 +2912,256 @@ def api_metric_data(metric_name):
     return jsonify({'error': 'Metric not found or no data available'}), 404
 
 
+def _begin_pipeline_run(status):
+    reload_status['in_progress'] = True
+    reload_status['error'] = None
+    reload_status['success'] = None
+    reload_status['status'] = status
+
+
+def _fail_pipeline_run(error):
+    reload_status['error'] = str(error)
+    reload_status['success'] = False
+    reload_status['status'] = 'Error occurred'
+
+
+def _run_data_phase():
+    """Refresh market data and fetch news articles. Makes no AI calls.
+
+    Raises if a required step (market_signals, divergence analysis) fails.
+    """
+    reload_status['status'] = 'Collecting market data...'
+
+    # Run market_signals.py (default ~35-year lookback, 12775 days in market_signals.py)
+    print("Running market_signals.py...")
+    result1 = subprocess.run(
+        ['python', 'market_signals.py'],
+        capture_output=True,
+        text=True,
+        timeout=300  # 5 minute timeout
+    )
+
+    if result1.returncode != 0:
+        raise Exception(f"market_signals.py failed: {result1.stderr}")
+
+    # Run divergence_analysis.py
+    reload_status['status'] = 'Running divergence analysis...'
+    print("Running divergence_analysis.py...")
+    result2 = subprocess.run(
+        ['python', 'divergence_analysis.py'],
+        capture_output=True,
+        text=True,
+        timeout=60  # 1 minute timeout
+    )
+
+    if result2.returncode != 0:
+        raise Exception(f"divergence_analysis.py failed: {result2.stderr}")
+
+    # Update recession probability panel data (US-146.1)
+    reload_status['status'] = 'Updating recession probability data...'
+    print("Updating recession probability data...")
+    try:
+        update_recession_probability()
+    except Exception as recession_error:
+        print(f"Recession probability update error (non-fatal): {recession_error}")
+
+    # Update market conditions cache (US-294.3)
+    reload_status['status'] = 'Updating market conditions...'
+    print("Updating market conditions...")
+    try:
+        update_market_conditions_cache()
+    except Exception as conditions_error:
+        print(f"Market conditions update error (non-fatal): {conditions_error}")
+
+    eastern = pytz.timezone('US/Eastern')
+    reload_status['last_reload'] = datetime.now(eastern).strftime('%Y-%m-%d %H:%M:%S')
+    print("Data reload completed successfully!")
+
+    # Fetch and store today's news articles. Summarizing them is AI work and
+    # happens once a week, over the whole week's articles, in the weekly review.
+    reload_status['status'] = 'Fetching daily news...'
+    print("Fetching daily news...")
+    try:
+        from news_pipeline import run_news_pipeline
+        run_news_pipeline()
+    except Exception as news_pipeline_error:
+        print(f"News pipeline error (non-fatal): {news_pipeline_error}")
+
+    _last_data_refresh['date'] = briefing_week.now_et().date()
+
+    # Update sector management tone data (US-123.1)
+    # Note: this pipeline is intentionally skipped during the daily refresh
+    # because FinBERT scoring is a long-running quarterly batch job.
+    # update_sector_management_tone() should be run manually or via a
+    # quarterly cron job after each earnings season completes.
+    # The context processor reads from the cache file set by that job.
+
+
 def run_data_collection():
-    """Run the data collection scripts in the background."""
+    """Data refresh for the daily job and the Reload Data button.
+
+    Data only: makes no AI calls. AI briefings come from the weekly review and
+    the per-briefing regenerate buttons. The caller holds _pipeline_lock.
+    """
     global reload_status
 
     try:
-        reload_status['in_progress'] = True
-        reload_status['error'] = None
-        reload_status['success'] = None
-        reload_status['status'] = 'Collecting market data...'
-
-        # Run market_signals.py (default ~35-year lookback, 12775 days in market_signals.py)
-        print("Running market_signals.py...")
-        result1 = subprocess.run(
-            ['python', 'market_signals.py'],
-            capture_output=True,
-            text=True,
-            timeout=300  # 5 minute timeout
-        )
-
-        if result1.returncode != 0:
-            raise Exception(f"market_signals.py failed: {result1.stderr}")
-
-        # Run divergence_analysis.py
-        reload_status['status'] = 'Running divergence analysis...'
-        print("Running divergence_analysis.py...")
-        result2 = subprocess.run(
-            ['python', 'divergence_analysis.py'],
-            capture_output=True,
-            text=True,
-            timeout=60  # 1 minute timeout
-        )
-
-        if result2.returncode != 0:
-            raise Exception(f"divergence_analysis.py failed: {result2.stderr}")
-
-        # Update recession probability panel data (US-146.1)
-        reload_status['status'] = 'Updating recession probability data...'
-        print("Updating recession probability data...")
-        try:
-            update_recession_probability()
-        except Exception as recession_error:
-            print(f"Recession probability update error (non-fatal): {recession_error}")
-
-        # Update market conditions cache (US-294.3)
-        reload_status['status'] = 'Updating market conditions...'
-        print("Updating market conditions...")
-        try:
-            update_market_conditions_cache()
-        except Exception as conditions_error:
-            print(f"Market conditions update error (non-fatal): {conditions_error}")
-
-        eastern = pytz.timezone('US/Eastern')
-        reload_status['last_reload'] = datetime.now(eastern).strftime('%Y-%m-%d %H:%M:%S')
-        print("Data reload completed successfully!")
-
-        # Fetch and store daily news BEFORE briefing generation so briefings can use it
-        reload_status['status'] = 'Fetching daily news...'
-        print("Fetching daily news...")
-        try:
-            from news_pipeline import run_news_pipeline
-            run_news_pipeline()
-        except Exception as news_pipeline_error:
-            print(f"News pipeline error (non-fatal): {news_pipeline_error}")
-
-        # Generate market-specific briefings FIRST so they can be included in general summary
-        # Generate Crypto AI summary
-        reload_status['status'] = 'Generating Crypto AI summary...'
-        print("Generating Crypto AI summary...")
-        try:
-            crypto_summary_data = generate_crypto_market_summary()
-            crypto_result = generate_crypto_summary(crypto_summary_data)
-            if crypto_result['success']:
-                print("Crypto AI summary generated successfully!")
-            else:
-                print(f"Crypto AI summary generation failed: {crypto_result['error']}")
-        except Exception as crypto_summary_error:
-            print(f"Crypto AI summary error (non-fatal): {crypto_summary_error}")
-
-        # Generate Equity AI summary
-        reload_status['status'] = 'Generating Equity AI summary...'
-        print("Generating Equity Markets AI summary...")
-        try:
-            equity_summary_data = generate_equity_market_summary()
-            equity_result = generate_equity_summary(equity_summary_data)
-            if equity_result['success']:
-                print("Equity AI summary generated successfully!")
-            else:
-                print(f"Equity AI summary generation failed: {equity_result['error']}")
-        except Exception as equity_summary_error:
-            print(f"Equity AI summary error (non-fatal): {equity_summary_error}")
-
-        # Generate Rates AI summary
-        reload_status['status'] = 'Generating Rates AI summary...'
-        print("Generating Rates & Yield Curve AI summary...")
-        try:
-            rates_summary_data = generate_rates_market_summary()
-            rates_result = generate_rates_summary(rates_summary_data)
-            if rates_result['success']:
-                print("Rates AI summary generated successfully!")
-            else:
-                print(f"Rates AI summary generation failed: {rates_result['error']}")
-        except Exception as rates_summary_error:
-            print(f"Rates AI summary error (non-fatal): {rates_summary_error}")
-
-        # Generate Dollar & Currency AI summary
-        reload_status['status'] = 'Generating Dollar AI summary...'
-        print("Generating Dollar & Currency AI summary...")
-        try:
-            dollar_summary_data = generate_dollar_market_summary()
-            dollar_result = generate_dollar_summary(dollar_summary_data)
-            if dollar_result['success']:
-                print("Dollar AI summary generated successfully!")
-            else:
-                print(f"Dollar AI summary generation failed: {dollar_result['error']}")
-        except Exception as dollar_summary_error:
-            print(f"Dollar AI summary error (non-fatal): {dollar_summary_error}")
-
-        # Generate Credit Markets AI summary
-        reload_status['status'] = 'Generating Credit AI summary...'
-        print("Generating Credit AI summary...")
-        try:
-            credit_summary_data = generate_credit_market_summary()
-            credit_result = generate_credit_summary(credit_summary_data)
-            if credit_result['success']:
-                print("Credit AI summary generated successfully!")
-            else:
-                print(f"Credit AI summary generation failed: {credit_result['error']}")
-        except Exception as credit_summary_error:
-            print(f"Credit AI summary error (non-fatal): {credit_summary_error}")
-
-        # Generate general AI summary AFTER market-specific briefings
-        # This allows it to include crypto/equity/rates/dollar briefings as context
-        reload_status['status'] = 'Generating AI daily summary...'
-        print("Generating AI daily summary...")
-        try:
-            market_summary = generate_market_summary()
-            top_movers = calculate_top_movers(5, period=5)
-            top_movers_1d = calculate_top_movers(5, period=1)
-            result = generate_daily_summary(market_summary, top_movers, top_movers_1d)
-            if result['success']:
-                print("AI summary generated successfully!")
-            else:
-                print(f"AI summary generation failed: {result['error']}")
-        except Exception as summary_error:
-            print(f"AI summary error (non-fatal): {summary_error}")
-
-        # Generate Market Conditions Synthesis (one-liner)
-        reload_status['status'] = 'Generating market conditions synthesis...'
-        print("Generating Market Conditions Synthesis...")
-        try:
-            synthesis_result = generate_market_conditions_synthesis()
-            if synthesis_result['success']:
-                print("Market conditions synthesis generated successfully!")
-            else:
-                print(f"Market synthesis generation failed: {synthesis_result['error']}")
-        except Exception as synthesis_error:
-            print(f"Market synthesis error (non-fatal): {synthesis_error}")
-
-        # Update sector management tone data (US-123.1)
-        # Note: this pipeline is intentionally skipped during the daily refresh
-        # because FinBERT scoring is a long-running quarterly batch job.
-        # update_sector_management_tone() should be run manually or via a
-        # quarterly cron job after each earnings season completes.
-        # The context processor reads from the cache file set by that job.
-
-        # Mark as successful
+        _begin_pipeline_run('Collecting market data...')
+        _run_data_phase()
         reload_status['success'] = True
         reload_status['status'] = 'Complete!'
 
     except Exception as e:
-        reload_status['error'] = str(e)
-        reload_status['success'] = False
-        reload_status['status'] = 'Error occurred'
+        _fail_pipeline_run(e)
         print(f"Data reload error: {e}")
 
     finally:
         reload_status['in_progress'] = False
 
 
+def run_weekly_ai_review(week_start, week_end):
+    """Every scheduled AI call, in dependency order. Returns how many steps succeeded.
+
+    Order matters: the section briefings read the week's news summary, and the
+    general briefing reads the section briefings. Each step is non-fatal so one
+    failure does not cost the rest of the week's review. Called inside
+    briefing_week.scheduled_run(), which stamps the records as scheduled and
+    meters every call.
+    """
+    succeeded = 0
+
+    # Summarize the whole week's stored news first, so the briefings can use it
+    reload_status['status'] = 'Summarizing the week\'s news...'
+    print(f"Summarizing news for {week_start} to {week_end}...")
+    try:
+        from news_pipeline import summarize_week_news
+        if summarize_week_news(week_start, week_end):
+            succeeded += 1
+    except Exception as news_summary_error:
+        print(f"News summary error (non-fatal): {news_summary_error}")
+
+    # Generate market-specific briefings FIRST so they can be included in general summary
+    # Generate Crypto AI summary
+    reload_status['status'] = 'Generating Crypto AI summary...'
+    print("Generating Crypto AI summary...")
+    try:
+        crypto_summary_data = generate_crypto_market_summary()
+        crypto_result = generate_crypto_summary(crypto_summary_data)
+        if crypto_result['success']:
+            succeeded += 1
+            print("Crypto AI summary generated successfully!")
+        else:
+            print(f"Crypto AI summary generation failed: {crypto_result['error']}")
+    except Exception as crypto_summary_error:
+        print(f"Crypto AI summary error (non-fatal): {crypto_summary_error}")
+
+    # Generate Equity AI summary
+    reload_status['status'] = 'Generating Equity AI summary...'
+    print("Generating Equity Markets AI summary...")
+    try:
+        equity_summary_data = generate_equity_market_summary()
+        equity_result = generate_equity_summary(equity_summary_data)
+        if equity_result['success']:
+            succeeded += 1
+            print("Equity AI summary generated successfully!")
+        else:
+            print(f"Equity AI summary generation failed: {equity_result['error']}")
+    except Exception as equity_summary_error:
+        print(f"Equity AI summary error (non-fatal): {equity_summary_error}")
+
+    # Generate Rates AI summary
+    reload_status['status'] = 'Generating Rates AI summary...'
+    print("Generating Rates & Yield Curve AI summary...")
+    try:
+        rates_summary_data = generate_rates_market_summary()
+        rates_result = generate_rates_summary(rates_summary_data)
+        if rates_result['success']:
+            succeeded += 1
+            print("Rates AI summary generated successfully!")
+        else:
+            print(f"Rates AI summary generation failed: {rates_result['error']}")
+    except Exception as rates_summary_error:
+        print(f"Rates AI summary error (non-fatal): {rates_summary_error}")
+
+    # Generate Dollar & Currency AI summary
+    reload_status['status'] = 'Generating Dollar AI summary...'
+    print("Generating Dollar & Currency AI summary...")
+    try:
+        dollar_summary_data = generate_dollar_market_summary()
+        dollar_result = generate_dollar_summary(dollar_summary_data)
+        if dollar_result['success']:
+            succeeded += 1
+            print("Dollar AI summary generated successfully!")
+        else:
+            print(f"Dollar AI summary generation failed: {dollar_result['error']}")
+    except Exception as dollar_summary_error:
+        print(f"Dollar AI summary error (non-fatal): {dollar_summary_error}")
+
+    # Generate Credit Markets AI summary
+    reload_status['status'] = 'Generating Credit AI summary...'
+    print("Generating Credit AI summary...")
+    try:
+        credit_summary_data = generate_credit_market_summary()
+        credit_result = generate_credit_summary(credit_summary_data)
+        if credit_result['success']:
+            succeeded += 1
+            print("Credit AI summary generated successfully!")
+        else:
+            print(f"Credit AI summary generation failed: {credit_result['error']}")
+    except Exception as credit_summary_error:
+        print(f"Credit AI summary error (non-fatal): {credit_summary_error}")
+
+    # Generate general AI summary AFTER market-specific briefings
+    # This allows it to include crypto/equity/rates/dollar briefings as context
+    reload_status['status'] = 'Generating AI daily summary...'
+    print("Generating AI daily summary...")
+    try:
+        market_summary = generate_market_summary()
+        top_movers = calculate_top_movers(5, period=5)
+        top_movers_1d = calculate_top_movers(5, period=1)
+        result = generate_daily_summary(market_summary, top_movers, top_movers_1d)
+        if result['success']:
+            succeeded += 1
+            print("AI summary generated successfully!")
+        else:
+            print(f"AI summary generation failed: {result['error']}")
+    except Exception as summary_error:
+        print(f"AI summary error (non-fatal): {summary_error}")
+
+    # Generate Market Conditions Synthesis (one-liner)
+    reload_status['status'] = 'Generating market conditions synthesis...'
+    print("Generating Market Conditions Synthesis...")
+    try:
+        synthesis_result = generate_market_conditions_synthesis()
+        if synthesis_result['success']:
+            succeeded += 1
+            print("Market conditions synthesis generated successfully!")
+        else:
+            print(f"Market synthesis generation failed: {synthesis_result['error']}")
+    except Exception as synthesis_error:
+        print(f"Market synthesis error (non-fatal): {synthesis_error}")
+
+    return succeeded
+
+
 @csrf.exempt
 @app.route('/api/reload-data', methods=['POST'])
 def api_reload_data():
-    """Trigger data reload in background."""
+    """Trigger a data-only reload in the background (no AI calls)."""
     global reload_status
 
-    if reload_status['in_progress']:
+    # Acquire here, not in the thread, so two quick clicks cannot both start a
+    # run, and a reload cannot start while the weekly AI review is running.
+    if not _pipeline_lock.acquire(blocking=False):
         return jsonify({
             'status': 'already_running',
             'message': 'Data reload is already in progress'
         }), 409
 
+    reload_status['in_progress'] = True
+
     # Start data collection in background thread
-    thread = threading.Thread(target=run_data_collection)
+    thread = threading.Thread(target=_run_holding_lock, args=(run_data_collection,))
     thread.daemon = True
     thread.start()
 
@@ -4153,7 +4416,8 @@ Write a single sentence synthesis (max 150 characters)."""
         synthesis_data = {
             'synthesis': synthesis,
             'statuses': statuses,
-            'generated_at': generated_at
+            'generated_at': generated_at,
+            **briefing_week.record_metadata(),
         }
         save_market_synthesis(synthesis_data)
 
@@ -4185,7 +4449,7 @@ def get_market_synthesis_for_display():
     """
     cached = load_market_synthesis()
     if cached and cached.get('synthesis'):
-        return cached
+        return {**cached, **briefing_week.display_fields(cached)}
     return None
 
 

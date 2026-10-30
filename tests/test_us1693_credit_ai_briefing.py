@@ -4,7 +4,7 @@ Static verification tests for US-169.3: Credit Page — AI Briefing Integration.
 Tests verify:
 - generate_credit_summary() function exists in ai_summary.py with correct contract
 - /api/credit-summary GET and /api/credit-summary/generate POST endpoints exist
-- Credit step is present in run_data_collection() after Dollar step, before Daily Summary
+- Credit step is present in run_weekly_ai_review() after Dollar step, before Daily Summary
 - generate_market_summary() already contains credit spread data
 - credit.html includes an AJAX-fetched AI analysis collapsible section
 """
@@ -303,12 +303,12 @@ class TestGenerateCreditMarketSummary(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# dashboard.py — credit step in run_data_collection()
+# dashboard.py — credit step in run_weekly_ai_review()
 # ---------------------------------------------------------------------------
 
 
 class TestCreditStepInPipeline(unittest.TestCase):
-    """Credit briefing step must exist in run_data_collection()."""
+    """Credit briefing step must exist in run_weekly_ai_review()."""
 
     @classmethod
     def setUpClass(cls):
@@ -343,7 +343,10 @@ class TestCreditStepOrdering(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.src = read_source('dashboard.py')
+        # Scheduled briefings run in the weekly review since US-490.1.
+        src = read_source('dashboard.py')
+        start = src.index('def run_weekly_ai_review(')
+        cls.src = src[start:src.index('\ndef ', start + 1)]
 
     def _find_pos(self, needle):
         pos = self.src.find(needle)
@@ -354,7 +357,7 @@ class TestCreditStepOrdering(unittest.TestCase):
         dollar_pos = self._find_pos('Generating Dollar AI summary...')
         credit_pos = self._find_pos('Generating Credit AI summary...')
         self.assertGreater(credit_pos, dollar_pos,
-                           'Credit step must appear AFTER Dollar step in run_data_collection()')
+                           'Credit step must appear AFTER Dollar step in run_weekly_ai_review()')
 
     def test_credit_step_before_daily_summary(self):
         credit_pos = self._find_pos('Generating Credit AI summary...')
