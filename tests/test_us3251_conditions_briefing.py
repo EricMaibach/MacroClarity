@@ -80,34 +80,23 @@ class TestConditionsContextInPrompt(unittest.TestCase):
 
 
 class TestThreeParagraphNarrative(unittest.TestCase):
-    """System prompt must enforce three-paragraph quadrant-led structure."""
+    """System prompt must stay quadrant-led.
+
+    US-490.2 replaced the three daily paragraphs (what's happening / changing /
+    what to do) with the week-in-review parts; their behaviour is covered in
+    tests/test_us4902_week_in_review.py. The quadrant framing carries over.
+    """
 
     @classmethod
     def setUpClass(cls):
         cls.src = read_source('ai_summary.py')
 
-    def test_three_paragraphs_instruction(self):
-        self.assertIn('3 paragraphs', self.src)
-
-    def test_whats_happening_paragraph(self):
-        self.assertIn("WHAT'S HAPPENING", self.src)
-
-    def test_whats_changing_paragraph(self):
-        self.assertIn("WHAT'S CHANGING", self.src)
-
-    def test_what_to_do_paragraph(self):
-        self.assertIn("WHAT TO DO", self.src)
+    def test_week_in_review_contract(self):
+        self.assertIn('weekly_review.output_format_instructions(weekly_review.GENERAL)', self.src)
 
     def test_quadrant_naming_instruction(self):
-        self.assertIn('naming the current macro quadrant', self.src)
-
-
-class TestOldRegimeRemoved(unittest.TestCase):
-    """Old regime references must not appear in AI prompt construction."""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.src = read_source('ai_summary.py')
+        self.assertIn('Use only the four quadrants', self.src)
+        self.assertIn('moved us toward or away from the current quadrant', self.src)
 
     def test_no_regime_prefix_briefing(self):
         self.assertNotIn('regime_prefix_briefing', self.src)
@@ -120,56 +109,40 @@ class TestOldRegimeRemoved(unittest.TestCase):
 
 
 class TestExpandedBriefingHistory(unittest.TestCase):
-    """Briefing history must be expanded from 3 to 14 days."""
+    """Briefings carry earlier reviews for continuity.
+
+    US-490.2: weekly cadence, so the window is the previous two weeks' reviews
+    (21 days, one review per week) instead of 14 days of daily briefings.
+    """
 
     @classmethod
     def setUpClass(cls):
         cls.src = read_source('ai_summary.py')
 
-    def test_14_day_history(self):
-        self.assertIn('get_recent_summaries(days=14)', self.src)
-
-    def test_daily_summary_uses_14_day_history(self):
-        # The generate_daily_summary function must call with days=14
-        idx = self.src.find('def generate_daily_summary')
+    def test_weekly_summary_uses_previous_weeks(self):
+        idx = self.src.find('def generate_weekly_summary')
         block = self.src[idx:idx + 3000]
-        self.assertIn('get_recent_summaries(days=14)', block)
+        self.assertIn('get_recent_summaries(days=21)', block)
 
     def test_earlier_predictions_reference(self):
-        self.assertIn('earlier predictions', self.src)
+        self.assertIn('refer back to an earlier call', self.src)
 
 
 class TestMarketSpecificBriefingHistory(unittest.TestCase):
-    """All 5 market-specific briefings must use 14-day history."""
+    """All 5 market-specific reviews use the previous weeks' reviews."""
 
     @classmethod
     def setUpClass(cls):
         cls.src = read_source('ai_summary.py')
 
-    def test_crypto_summary_uses_14_day_history(self):
-        idx = self.src.find('def generate_crypto_summary')
+    def test_section_reviews_use_previous_weeks(self):
+        idx = self.src.find('def generate_section_review')
         block = self.src[idx:idx + 3000]
-        self.assertIn('get_recent_crypto_summaries(days=14)', block)
+        self.assertIn("cfg['recent'](days=21)", block)
 
-    def test_equity_summary_uses_14_day_history(self):
-        idx = self.src.find('def generate_equity_summary')
-        block = self.src[idx:idx + 3000]
-        self.assertIn('get_recent_equity_summaries(days=14)', block)
-
-    def test_rates_summary_uses_14_day_history(self):
-        idx = self.src.find('def generate_rates_summary')
-        block = self.src[idx:idx + 3000]
-        self.assertIn('get_recent_rates_summaries(days=14)', block)
-
-    def test_dollar_summary_uses_14_day_history(self):
-        idx = self.src.find('def generate_dollar_summary')
-        block = self.src[idx:idx + 3000]
-        self.assertIn('get_recent_dollar_summaries(days=14)', block)
-
-    def test_credit_summary_uses_14_day_history(self):
-        idx = self.src.find('def generate_credit_summary')
-        block = self.src[idx:idx + 3000]
-        self.assertIn('get_recent_credit_summaries(days=14)', block)
+    def test_every_section_has_its_own_history(self):
+        for section in ('crypto', 'equity', 'rates', 'dollar', 'credit'):
+            self.assertIn(f"'recent': get_recent_{section}_summaries", self.src)
 
 
 class TestOldRegimeRemovedFromPrompts(unittest.TestCase):
@@ -187,13 +160,13 @@ class TestOldRegimeRemovedFromPrompts(unittest.TestCase):
 
     def test_no_old_regime_labels_in_credit_prompt(self):
         """Credit prompt must not reference bull/bear/recession watch labels."""
-        idx = self.ai_src.find('def generate_credit_summary')
+        idx = self.ai_src.find("    'credit': {")
         block = self.ai_src[idx:idx + 5000]
         self.assertNotIn('bull/bear/recession watch', block.lower())
 
     def test_credit_prompt_uses_conditions_quadrant(self):
         """Credit prompt should reference conditions quadrant, not old regime."""
-        idx = self.ai_src.find('def generate_credit_summary')
+        idx = self.ai_src.find("    'credit': {")
         block = self.ai_src[idx:idx + 5000]
         self.assertIn('conditions quadrant', block)
 
@@ -206,17 +179,17 @@ class TestMaxTokensIncreased(unittest.TestCase):
         cls.src = read_source('ai_summary.py')
 
     def test_max_tokens_sufficient(self):
-        # Find the call_ai_with_tools call in generate_daily_summary context.
+        # Find the call_ai_with_tools call in generate_weekly_summary context.
         # Asserted as a floor, not an exact value: US-16.1.2 made max_tokens a
         # combined reasoning + output ceiling (thinking is always on and is
         # generated against the same budget), so the number legitimately moves
         # upward. What must never happen is it dropping below what three
         # paragraphs need.
-        idx = self.src.find('def generate_daily_summary')
+        idx = self.src.find('def generate_weekly_summary')
         end_idx = self.src.find('\ndef ', idx + 1)
         block = self.src[idx:end_idx]
         match = re.search(r'max_tokens=(\d+)', block)
-        self.assertIsNotNone(match, 'no max_tokens= in generate_daily_summary')
+        self.assertIsNotNone(match, 'no max_tokens= in generate_weekly_summary')
         self.assertGreaterEqual(int(match.group(1)), 800)
 
 

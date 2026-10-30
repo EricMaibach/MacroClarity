@@ -323,54 +323,64 @@ class TestStoredNewsContextHelper:
 class TestBriefingFunctionsUseStoredData:
     """Tests that each briefing function uses _get_stored_news_context instead of live fetch."""
 
-    def test_generate_daily_summary_uses_stored_context(self):
-        """generate_daily_summary uses _get_stored_news_context(), not fetch_news_for_summary()."""
-        src = _get_function_source(AI_SUMMARY_SOURCE, 'generate_daily_summary')
+    def test_generate_weekly_summary_uses_stored_context(self):
+        """generate_weekly_summary uses _get_stored_news_context(), not fetch_news_for_summary()."""
+        src = _get_function_source(AI_SUMMARY_SOURCE, 'generate_weekly_summary')
         assert '_get_stored_news_context' in src, (
-            "generate_daily_summary must call _get_stored_news_context()"
+            "generate_weekly_summary must call _get_stored_news_context()"
         )
         assert 'fetch_news_for_summary()' not in src, (
-            "generate_daily_summary must NOT call fetch_news_for_summary() live"
+            "generate_weekly_summary must NOT call fetch_news_for_summary() live"
         )
 
     def test_generate_crypto_summary_uses_stored_context(self):
         """generate_crypto_summary uses _get_stored_news_context(topic='crypto')."""
-        src = _get_function_source(AI_SUMMARY_SOURCE, 'generate_crypto_summary')
+        # US-490.2: the five section generators share generate_section_review()
+        src = _get_function_source(AI_SUMMARY_SOURCE, 'generate_section_review')
+        assert "generate_section_review('crypto'" in AI_SUMMARY_SOURCE
         assert '_get_stored_news_context' in src, (
             "generate_crypto_summary must call _get_stored_news_context()"
         )
         assert 'fetch_crypto_news()' not in src, (
             "generate_crypto_summary must NOT call fetch_crypto_news() live"
         )
-        assert "crypto" in src, "Must pass topic='crypto' to the helper"
+        assert "topic=section" in src, "Must pass the section as the topic"
 
     def test_generate_equity_summary_uses_stored_context(self):
         """generate_equity_summary uses _get_stored_news_context(topic='equity')."""
-        src = _get_function_source(AI_SUMMARY_SOURCE, 'generate_equity_summary')
+        # US-490.2: the five section generators share generate_section_review()
+        src = _get_function_source(AI_SUMMARY_SOURCE, 'generate_section_review')
+        assert "generate_section_review('equity'" in AI_SUMMARY_SOURCE
         assert '_get_stored_news_context' in src
         assert 'fetch_equity_news()' not in src
-        assert "equity" in src
+        assert "topic=section" in src, "Must pass the section as the topic"
 
     def test_generate_rates_summary_uses_stored_context(self):
         """generate_rates_summary uses _get_stored_news_context(topic='rates')."""
-        src = _get_function_source(AI_SUMMARY_SOURCE, 'generate_rates_summary')
+        # US-490.2: the five section generators share generate_section_review()
+        src = _get_function_source(AI_SUMMARY_SOURCE, 'generate_section_review')
+        assert "generate_section_review('rates'" in AI_SUMMARY_SOURCE
         assert '_get_stored_news_context' in src
         assert 'fetch_rates_news()' not in src
-        assert "rates" in src
+        assert "topic=section" in src, "Must pass the section as the topic"
 
     def test_generate_dollar_summary_uses_stored_context(self):
         """generate_dollar_summary uses _get_stored_news_context(topic='dollar')."""
-        src = _get_function_source(AI_SUMMARY_SOURCE, 'generate_dollar_summary')
+        # US-490.2: the five section generators share generate_section_review()
+        src = _get_function_source(AI_SUMMARY_SOURCE, 'generate_section_review')
+        assert "generate_section_review('dollar'" in AI_SUMMARY_SOURCE
         assert '_get_stored_news_context' in src
         assert 'fetch_dollar_news()' not in src
-        assert "dollar" in src
+        assert "topic=section" in src, "Must pass the section as the topic"
 
     def test_generate_credit_summary_uses_stored_context(self):
         """generate_credit_summary uses _get_stored_news_context(topic='credit')."""
-        src = _get_function_source(AI_SUMMARY_SOURCE, 'generate_credit_summary')
+        # US-490.2: the five section generators share generate_section_review()
+        src = _get_function_source(AI_SUMMARY_SOURCE, 'generate_section_review')
+        assert "generate_section_review('credit'" in AI_SUMMARY_SOURCE
         assert '_get_stored_news_context' in src
         assert 'fetch_credit_news()' not in src
-        assert "credit" in src
+        assert "topic=section" in src, "Must pass the section as the topic"
 
 
 # ---------------------------------------------------------------------------
@@ -381,12 +391,8 @@ class TestGracefulFallback:
     """Tests that briefing functions handle None news context without crashing."""
 
     @pytest.mark.parametrize("func_name,news_section_label", [
-        ("generate_daily_summary", "TODAY'S NEWS CONTEXT"),
-        ("generate_crypto_summary", "TODAY'S CRYPTO NEWS"),
-        ("generate_equity_summary", "TODAY'S EQUITY NEWS"),
-        ("generate_rates_summary", "TODAY'S RATES NEWS"),
-        ("generate_dollar_summary", "TODAY'S DOLLAR NEWS"),
-        ("generate_credit_summary", "TODAY'S CREDIT NEWS"),
+        ("generate_weekly_summary", "THIS WEEK'S NEWS"),
+        ("generate_section_review", "This Week's {Topic} News"),
     ])
     def test_briefing_handles_none_news_context(self, func_name, news_section_label):
         """Each briefing function handles None from _get_stored_news_context() gracefully."""
@@ -397,12 +403,8 @@ class TestGracefulFallback:
         )
 
     @pytest.mark.parametrize("func_name", [
-        "generate_daily_summary",
-        "generate_crypto_summary",
-        "generate_equity_summary",
-        "generate_rates_summary",
-        "generate_dollar_summary",
-        "generate_credit_summary",
+        "generate_weekly_summary",
+        "generate_section_review",
     ])
     def test_briefing_no_bare_dict_access_on_stored(self, func_name):
         """Briefing functions access stored data via helper, not bare dict indexing."""
@@ -511,8 +513,8 @@ class TestSecurityConstraints:
 class TestOldFetchFunctionsNotCalledFromBriefings:
     """Verify old live fetch_*_news() functions are not called in briefing generation."""
 
-    def test_fetch_news_for_summary_not_called_in_generate_daily_summary(self):
-        src = _get_function_source(AI_SUMMARY_SOURCE, 'generate_daily_summary')
+    def test_fetch_news_for_summary_not_called_in_generate_weekly_summary(self):
+        src = _get_function_source(AI_SUMMARY_SOURCE, 'generate_weekly_summary')
         assert 'fetch_news_for_summary()' not in src
 
     def test_fetch_crypto_news_not_called_in_generate_crypto_summary(self):
@@ -536,11 +538,11 @@ class TestOldFetchFunctionsNotCalledFromBriefings:
         assert 'fetch_credit_news()' not in src
 
     def test_helper_defined_before_its_first_use(self):
-        """_get_stored_news_context is defined before generate_daily_summary uses it."""
+        """_get_stored_news_context is defined before generate_weekly_summary uses it."""
         helper_line = AI_SUMMARY_SOURCE.find('def _get_stored_news_context')
-        daily_line = AI_SUMMARY_SOURCE.find('def generate_daily_summary')
+        daily_line = AI_SUMMARY_SOURCE.find('def generate_weekly_summary')
         assert helper_line < daily_line, (
-            "_get_stored_news_context must be defined before generate_daily_summary"
+            "_get_stored_news_context must be defined before generate_weekly_summary"
         )
 
     def test_helper_accepts_optional_topic_parameter(self):

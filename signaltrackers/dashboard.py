@@ -22,7 +22,7 @@ from apscheduler.triggers.cron import CronTrigger
 import pytz
 from web_search import SEARCH_FUNCTION_DEFINITION, execute_search_function, is_tavily_configured
 from ai_summary import (
-    generate_daily_summary, get_summary_for_display, get_latest_summary,
+    generate_weekly_summary, get_summary_for_display, get_latest_summary,
     generate_crypto_summary, get_crypto_summary_for_display,
     generate_equity_summary, get_equity_summary_for_display,
     generate_rates_summary, get_rates_summary_for_display,
@@ -3113,13 +3113,12 @@ def run_weekly_ai_review(week_start, week_end):
 
     # Generate general AI summary AFTER market-specific briefings
     # This allows it to include crypto/equity/rates/dollar briefings as context
-    reload_status['status'] = 'Generating AI daily summary...'
-    print("Generating AI daily summary...")
+    reload_status['status'] = 'Generating the week in review...'
+    print("Generating the general week in review...")
     try:
         market_summary = generate_market_summary()
         top_movers = calculate_top_movers(5, period=5)
-        top_movers_1d = calculate_top_movers(5, period=1)
-        result = generate_daily_summary(market_summary, top_movers, top_movers_1d)
+        result = generate_weekly_summary(market_summary, top_movers)
         if result['success']:
             succeeded += 1
             print("AI summary generated successfully!")
@@ -3197,7 +3196,7 @@ def api_scheduler_status():
 
 @app.route('/api/ai-summary')
 def api_ai_summary():
-    """Get the current AI-generated daily summary."""
+    """Get the current AI-generated week in review."""
     summary = get_summary_for_display()
     if summary:
         return jsonify(summary)
@@ -3215,8 +3214,7 @@ def api_generate_summary():
     try:
         market_summary = generate_market_summary()
         top_movers = calculate_top_movers(5, period=5)
-        top_movers_1d = calculate_top_movers(5, period=1)
-        result = generate_daily_summary(market_summary, top_movers, top_movers_1d)
+        result = generate_weekly_summary(market_summary, top_movers)
 
         if result['success']:
             return jsonify({
@@ -3477,7 +3475,7 @@ def _build_chatbot_enrichment_context():
 
         general = get_latest_summary()
         if general and general.get('summary'):
-            briefings_parts.append(f"### General Daily Briefing ({general.get('date', 'unknown')}):\n{general['summary']}")
+            briefings_parts.append(f"### General Week in Review ({general.get('date', 'unknown')}):\n{general['summary']}")
 
         for name, getter in [
             ('Crypto', get_latest_crypto_summary),
@@ -3488,10 +3486,10 @@ def _build_chatbot_enrichment_context():
         ]:
             summary = getter()
             if summary and summary.get('summary'):
-                briefings_parts.append(f"### {name} Briefing ({summary.get('date', 'unknown')}):\n{summary['summary']}")
+                briefings_parts.append(f"### {name} Week in Review ({summary.get('date', 'unknown')}):\n{summary['summary']}")
 
         if briefings_parts:
-            parts.append("## TODAY'S AI BRIEFINGS\n" + "\n\n".join(briefings_parts))
+            parts.append("## THIS WEEK'S AI REVIEWS\n" + "\n\n".join(briefings_parts))
     except Exception:
         pass
 

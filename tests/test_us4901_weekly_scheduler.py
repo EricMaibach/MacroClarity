@@ -384,7 +384,7 @@ class TestWeeklyOrder:
         patches += [
             patch.object(dashboard, 'generate_market_summary', return_value=''),
             patch.object(dashboard, 'calculate_top_movers', return_value=[]),
-            patch.object(dashboard, 'generate_daily_summary', side_effect=step('general')),
+            patch.object(dashboard, 'generate_weekly_summary', side_effect=step('general')),
             patch.object(dashboard, 'generate_market_conditions_synthesis', side_effect=step('synthesis')),
         ]
         for p in patches:
@@ -615,7 +615,7 @@ class TestWeeklyNews:
         self._seed(days)
         seen = {}
         with patch.object(news_pipeline, '_generate_cross_market_summary',
-                          side_effect=lambda arts: seen.setdefault('cross', arts) and 'weekly'), \
+                          side_effect=lambda arts, *week: seen.setdefault('cross', arts) and 'weekly'), \
              patch.object(news_pipeline, '_generate_all_topic_summaries', return_value={'rates': 't'}), \
              patch.object(briefing_week, 'now_et', return_value=et(2026, 10, 30, 18, 10)), \
              briefing_week.scheduled_run(date(2026, 10, 26), date(2026, 10, 30)):

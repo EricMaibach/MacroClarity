@@ -53,47 +53,52 @@ class TestCreditSummaryFunctionExists(unittest.TestCase):
         self.assertIn('def generate_credit_summary(credit_data_summary)', self.src,
                       'generate_credit_summary() must accept credit_data_summary parameter')
 
-    def test_returns_success_key(self):
+    def test_delegates_to_section_review(self):
         idx = self.src.find('def generate_credit_summary(')
+        self.assertIn("return generate_section_review('credit', credit_data_summary)",
+                      self.src[idx:idx + 300])
+
+    def test_returns_success_key(self):
+        idx = self.src.find('def generate_section_review(')
         ctx = self.src[idx:idx + 5000]
         self.assertIn("'success'", ctx,
                       "generate_credit_summary() must return dict with 'success' key")
 
     def test_returns_summary_key(self):
-        idx = self.src.find('def generate_credit_summary(')
+        idx = self.src.find('def generate_section_review(')
         ctx = self.src[idx:idx + 5000]
         self.assertIn("'summary'", ctx,
                       "generate_credit_summary() must return dict with 'summary' key")
 
     def test_returns_error_key(self):
-        idx = self.src.find('def generate_credit_summary(')
+        idx = self.src.find('def generate_section_review(')
         ctx = self.src[idx:idx + 5000]
         self.assertIn("'error'", ctx,
                       "generate_credit_summary() must return dict with 'error' key")
 
     def test_calls_get_ai_client(self):
-        idx = self.src.find('def generate_credit_summary(')
+        idx = self.src.find('def generate_section_review(')
         ctx = self.src[idx:idx + 5000]
         self.assertIn('get_ai_client()', ctx,
                       'generate_credit_summary() must call get_ai_client()')
 
     def test_handles_client_unavailable(self):
         """When client is None, returns success=False gracefully."""
-        idx = self.src.find('def generate_credit_summary(')
-        ctx = self.src[idx:idx + 500]
+        idx = self.src.find('def generate_section_review(')
+        ctx = self.src[idx:idx + 1200]
         self.assertIn('if client is None', ctx,
                       'generate_credit_summary() must handle missing AI client gracefully')
 
     def test_has_exception_handler(self):
-        idx = self.src.find('def generate_credit_summary(')
+        idx = self.src.find('def generate_section_review(')
         ctx = self.src[idx:idx + 5000]
         self.assertIn('except Exception', ctx,
                       'generate_credit_summary() must have a top-level exception handler')
 
     def test_calls_save_credit_summary(self):
-        idx = self.src.find('def generate_credit_summary(')
+        idx = self.src.find('def generate_section_review(')
         ctx = self.src[idx:idx + 5000]
-        self.assertIn('save_credit_summary(', ctx,
+        self.assertIn("cfg['save'](", ctx,
                       'generate_credit_summary() must call save_credit_summary() on success')
 
 
@@ -361,7 +366,7 @@ class TestCreditStepOrdering(unittest.TestCase):
 
     def test_credit_step_before_daily_summary(self):
         credit_pos = self._find_pos('Generating Credit AI summary...')
-        daily_pos = self._find_pos('Generating AI daily summary...')
+        daily_pos = self._find_pos('Generating the week in review...')
         self.assertGreater(daily_pos, credit_pos,
                            'Credit step must appear BEFORE Daily Summary step')
 
@@ -388,7 +393,7 @@ class TestCreditStepNonFatal(unittest.TestCase):
 
     def test_daily_summary_step_follows_credit_except(self):
         credit_except_pos = self.src.find('Credit AI summary error (non-fatal)')
-        daily_status_pos = self.src.find('Generating AI daily summary...')
+        daily_status_pos = self.src.find('Generating the week in review...')
         self.assertGreater(daily_status_pos, credit_except_pos,
                            'Daily summary step must follow the credit except block')
 
@@ -546,8 +551,8 @@ class TestExistingPipelineStepsUnmodified(unittest.TestCase):
         self.assertIn('generate_dollar_market_summary()', self.src)
 
     def test_daily_summary_step_present(self):
-        self.assertIn('Generating AI daily summary...', self.src)
-        self.assertIn('generate_daily_summary(', self.src)
+        self.assertIn('Generating the week in review...', self.src)
+        self.assertIn('generate_weekly_summary(', self.src)
 
 
 if __name__ == '__main__':

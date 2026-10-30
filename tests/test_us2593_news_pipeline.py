@@ -287,7 +287,7 @@ class TestAISummary:
         mod = load_news_pipeline_module()
         call_count = []
 
-        def mock_summarize(articles):
+        def mock_summarize(articles, *week):
             call_count.append(1)
             return 'summary text'
 
@@ -605,7 +605,7 @@ class TestDashboardIntegration:
     def test_news_summary_runs_before_general_summary(self):
         body = self._body('def run_weekly_ai_review(', 'def api_reload_data(')
         news_idx = body.find('summarize_week_news(')
-        daily_idx = body.find('generate_daily_summary(')
+        daily_idx = body.find('generate_weekly_summary(')
         assert news_idx >= 0
         assert daily_idx >= 0
         assert news_idx < daily_idx

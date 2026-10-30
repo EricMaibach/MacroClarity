@@ -39,8 +39,13 @@ SERVER_SIDE_FALLBACK_BETA = 'server-side-fallback-2026-07-01'
 
 
 def build_request_params(model, max_tokens, system, messages,
-                         tools=None, effort=None):
+                         tools=None, effort=None, tool_choice=None, cache=False):
     """Build the kwargs for a `client.beta.messages.create()` call.
+
+    `cache=True` adds top-level automatic prompt caching, which caches the
+    last cacheable block. Use it on multi-turn tool loops: every turn re-sends
+    the whole conversation, search results included, and a cached prefix is
+    read at a small fraction of the input price instead of paid in full.
 
     `effort` defaults to the validated ANTHROPIC_EFFORT from config. Pass it
     explicitly on short-output paths, where the configured level would spend
@@ -56,8 +61,12 @@ def build_request_params(model, max_tokens, system, messages,
         'betas': [SERVER_SIDE_FALLBACK_BETA],
         'fallbacks': 'default',
     }
+    if cache:
+        params['cache_control'] = {'type': 'ephemeral'}
     if tools:
         params['tools'] = tools
+        if tool_choice:
+            params['tool_choice'] = tool_choice
     return params
 
 

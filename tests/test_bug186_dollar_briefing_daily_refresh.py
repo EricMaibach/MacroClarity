@@ -80,7 +80,7 @@ class TestDollarStepOrdering(unittest.TestCase):
 
     def test_dollar_step_before_daily_summary_step(self):
         dollar_pos = self._find_pos('Generating Dollar AI summary...')
-        daily_pos = self._find_pos('Generating AI daily summary...')
+        daily_pos = self._find_pos('Generating the week in review...')
         self.assertGreater(daily_pos, dollar_pos,
                            'Dollar step must appear BEFORE Daily Summary step in run_weekly_ai_review()')
 
@@ -126,7 +126,7 @@ class TestDollarStepNonFatal(unittest.TestCase):
     def test_daily_summary_step_follows_dollar_except(self):
         # After the except clause for the dollar step, the daily summary step must follow
         dollar_except_pos = self.src.find('Dollar AI summary error (non-fatal)')
-        daily_status_pos = self.src.find('Generating AI daily summary...')
+        daily_status_pos = self.src.find('Generating the week in review...')
         self.assertGreater(daily_status_pos, dollar_except_pos,
                            'Daily summary step must follow the dollar except block')
 
@@ -159,8 +159,8 @@ class TestExistingStepsUnmodified(unittest.TestCase):
         self.assertIn('generate_rates_summary(', self.src)
 
     def test_daily_summary_step_present(self):
-        self.assertIn('Generating AI daily summary...', self.src)
-        self.assertIn('generate_daily_summary(', self.src)
+        self.assertIn('Generating the week in review...', self.src)
+        self.assertIn('generate_weekly_summary(', self.src)
 
     def test_crypto_error_log_unchanged(self):
         self.assertIn('Crypto AI summary error (non-fatal)', self.src)
@@ -178,7 +178,7 @@ class TestExistingStepsUnmodified(unittest.TestCase):
 
 
 class TestDailySummaryDollarBranch(unittest.TestCase):
-    """generate_daily_summary() dollar branch must be intact in ai_summary.py."""
+    """generate_weekly_summary() dollar branch must be intact in ai_summary.py."""
 
     @classmethod
     def setUpClass(cls):
@@ -189,18 +189,18 @@ class TestDailySummaryDollarBranch(unittest.TestCase):
                       'get_latest_dollar_summary() call missing from ai_summary.py')
 
     def test_dollar_date_guard_present(self):
-        # Verify date-check guard: dollar_summary.get("date") == today
-        self.assertIn('dollar_summary.get("date")', self.src,
-                      'Dollar date-check guard missing in ai_summary.py')
+        # US-490.2: section reviews are fed in only when they are from the same week
+        self.assertIn('if _same_week(record, week_start):', self.src,
+                      'Same-week guard on section reviews missing in ai_summary.py')
 
     def test_dollar_briefing_context_label(self):
-        self.assertIn('Dollar & Currency Briefing', self.src,
-                      '"Dollar & Currency Briefing" context label missing from ai_summary.py')
+        self.assertIn('("Dollar & Currency", get_latest_dollar_summary())', self.src,
+                      'Dollar & Currency review label missing from ai_summary.py')
 
     def test_crypto_equity_rates_branches_intact(self):
-        self.assertIn('Crypto/Bitcoin Briefing', self.src)
-        self.assertIn('Equity Markets Briefing', self.src)
-        self.assertIn('Rates & Yield Curve Briefing', self.src)
+        self.assertIn('("Crypto/Bitcoin"', self.src)
+        self.assertIn('("Equity Markets"', self.src)
+        self.assertIn('("Rates & Yield Curve"', self.src)
 
 
 # ---------------------------------------------------------------------------
