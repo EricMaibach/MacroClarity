@@ -4,7 +4,8 @@ Tests for US-259.1: News page backend route and data model.
 Verifies:
 - Flask route /news exists in dashboard.py
 - Route function is named 'news'
-- Route passes required template variables (summary_text, sources, summary_date, is_stale, stale_date, extract_domain)
+- Route passes required template variables (summary_text, source_groups, week_label, is_stale, empty_state, extract_domain)
+  (weekly framing since US-490.4)
 - extract_domain correctly strips domain from URLs
 - news.html template exists and extends base.html
 - news.html renders 'No news yet' empty state when no data
@@ -66,16 +67,17 @@ class TestNewsRoute:
         assert 'summary_text=summary_text' in dashboard_src
 
     def test_route_passes_sources(self, dashboard_src):
-        assert 'sources=sources' in dashboard_src
+        # Grouped by day since US-490.4
+        assert 'source_groups=source_groups' in dashboard_src
 
-    def test_route_passes_summary_date(self, dashboard_src):
-        assert 'summary_date=summary_date' in dashboard_src
+    def test_route_passes_week_label(self, dashboard_src):
+        assert 'week_label=week_label' in dashboard_src
 
     def test_route_passes_is_stale(self, dashboard_src):
         assert 'is_stale=is_stale' in dashboard_src
 
-    def test_route_passes_stale_date(self, dashboard_src):
-        assert 'stale_date=stale_date' in dashboard_src
+    def test_route_passes_empty_state(self, dashboard_src):
+        assert 'empty_state=empty_state' in dashboard_src
 
     def test_route_passes_extract_domain(self, dashboard_src):
         assert 'extract_domain=extract_domain' in dashboard_src
@@ -137,10 +139,10 @@ class TestNewsTemplate:
         assert 'news.css' in news_html
 
     def test_has_page_heading(self, news_html):
-        assert "Today's Macro News" in news_html
+        assert "This Week's Macro News" in news_html
 
     def test_has_ai_summary_region(self, news_html):
-        assert 'AI-generated news summary' in news_html or 'AI Summary' in news_html
+        assert 'AI-generated weekly news review' in news_html
 
     def test_has_sources_section(self, news_html):
         assert 'Sources' in news_html or 'sources' in news_html.lower()
@@ -170,7 +172,8 @@ class TestNewsTemplate:
         assert 'summary_text' in news_html
 
     def test_sources_loop(self, news_html):
-        assert 'for source in sources' in news_html
+        assert 'for group in source_groups' in news_html
+        assert 'for source in group.articles' in news_html
 
 
 # ─── CSS ──────────────────────────────────────────────────────────────────────

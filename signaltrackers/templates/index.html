@@ -3,6 +3,7 @@
 {% block title %}MacroClarity - Macro Finance Data & Analysis{% endblock %}
 
 {% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/components/week-review.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/components/conditions-summary.css') }}">
 {% endblock %}
 
@@ -751,6 +752,7 @@
 {% endblock %}
 
 {% block extra_js %}
+<script src="{{ url_for('static', filename='js/components/week-review.js') }}"></script>
 <script>
 {# ════════════════════════════════════════════════════════════════
    Week in Review loader (US-490.3)
@@ -760,137 +762,7 @@
    clock: new Date('2026-10-30') is Oct 29 in any US timezone.
    ════════════════════════════════════════════════════════════════ #}
 const BRIEFING_ERROR_COPY = "This week's review isn't ready yet. Check back shortly.";
-const BRIEFING_STALE_MS = 8 * 24 * 60 * 60 * 1000;
-const WEEK_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const WEEK_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const WATCH_DAY_NAMES = { Mon: 'Monday', Tue: 'Tuesday', Wed: 'Wednesday', Thu: 'Thursday', Fri: 'Friday' };
-
-// "2026-10-30" or "2026-10-30T17:45:00-04:00" → {y, m, d, dow}; the date part
-// of an ET timestamp is already the ET calendar day.
-function parseWeekDate(value) {
-    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(value || '');
-    if (!m) return null;
-    const y = +m[1], mo = +m[2] - 1, d = +m[3];
-    return { y: y, m: mo, d: d, dow: new Date(Date.UTC(y, mo, d)).getUTCDay(), iso: m[0] };
-}
-
-function formatShortDay(p) {
-    return WEEK_DAYS[p.dow] + ', ' + WEEK_MONTHS[p.m] + ' ' + p.d;
-}
-
-// "Week of Oct 26–30, 2026" / "Week of Oct 29 – Nov 2, 2026" /
-// "Week of Dec 29, 2025 – Jan 2, 2026" / "Week to date · through Wed, Nov 4"
-function formatWeekLabel(data) {
-    const start = parseWeekDate(data.week_start);
-    const end = parseWeekDate(data.week_end);
-    if (!start || !end) return null;
-    if (data.week_to_date) {
-        const through = parseWeekDate(data.through) || end;
-        return 'Week to date · through ' + formatShortDay(through);
-    }
-    if (start.y !== end.y) {
-        return 'Week of ' + WEEK_MONTHS[start.m] + ' ' + start.d + ', ' + start.y +
-            ' – ' + WEEK_MONTHS[end.m] + ' ' + end.d + ', ' + end.y;
-    }
-    if (start.m !== end.m) {
-        return 'Week of ' + WEEK_MONTHS[start.m] + ' ' + start.d +
-            ' – ' + WEEK_MONTHS[end.m] + ' ' + end.d + ', ' + end.y;
-    }
-    return 'Week of ' + WEEK_MONTHS[start.m] + ' ' + start.d + '–' + end.d + ', ' + end.y;
-}
-
-// "Published Fri, Oct 30 · Next review Fri, Nov 6" (or "Updated …" after a manual regenerate)
-function formatFreshness(data) {
-    const published = parseWeekDate(data.published_at);
-    const next = parseWeekDate(data.next_review_at);
-    const parts = [];
-    if (published) {
-        parts.push((data.run_type === 'scheduled' ? 'Published ' : 'Updated ') + formatShortDay(published));
-    }
-    if (next) parts.push('Next review ' + formatShortDay(next));
-    return parts.join(' · ');
-}
-
-// Stale only when a whole Friday run was missed. Absolute timestamps, so the
-// reader's timezone does not matter; "now" is the browser clock.
-function isBriefingStale(data) {
-    const published = Date.parse(data.published_at || '');
-    return !isNaN(published) && (Date.now() - published) > BRIEFING_STALE_MS;
-}
-
-function makeEl(tag, className, text) {
-    const el = document.createElement(tag);
-    if (className) el.className = className;
-    if (text !== undefined) el.textContent = text;
-    return el;
-}
-
-function makePart(label) {
-    const part = makeEl('div', 'briefing-part');
-    part.appendChild(makeEl('h4', 'briefing-part__label', label));
-    return part;
-}
-
-function makeWatchItem(item) {
-    const li = makeEl('li', 'briefing-watch__item');
-    const chip = makeEl('span', 'briefing-watch__day');
-    if (item.day === 'Ongoing') {
-        chip.setAttribute('aria-label', 'Ongoing');
-        chip.appendChild(makeEl('span', null, '—')).setAttribute('aria-hidden', 'true');
-        chip.appendChild(makeEl('span', 'visually-hidden', 'Ongoing: '));
-    } else {
-        chip.appendChild(makeEl('span', null, item.day)).setAttribute('aria-hidden', 'true');
-        chip.appendChild(makeEl('span', 'visually-hidden', (WATCH_DAY_NAMES[item.day] || item.day) + ': '));
-    }
-    li.appendChild(chip);
-    const text = makeEl('span', 'briefing-watch__text');
-    text.appendChild(makeEl('span', 'briefing-watch__event', item.event || ''));
-    if (item.reason) text.appendChild(makeEl('span', 'briefing-watch__reason', item.reason));
-    li.appendChild(text);
-    return li;
-}
-
-// Builds the headline + three parts with textContent only, so model output is
-// never parsed as HTML. Renders whichever parts exist; returns null if none do.
-function buildStructuredReview(s) {
-    const fragment = document.createDocumentFragment();
-    if (s.headline) fragment.appendChild(makeEl('p', 'briefing-headline', s.headline));
-
-    const main = makeEl('div', 'briefing-review__main');
-    const changed = Array.isArray(s.changed) ? s.changed.filter(Boolean) : [];
-    if (changed.length) {
-        const part = makePart('What changed');
-        const ul = makeEl('ul', 'briefing-changed');
-        changed.forEach(function (text) { ul.appendChild(makeEl('li', null, text)); });
-        part.appendChild(ul);
-        main.appendChild(part);
-    }
-    const why = typeof s.why === 'string' ? s.why.split(/\n\s*\n/).filter(function (p) { return p.trim(); }) : [];
-    if (why.length) {
-        const part = makePart('Why it matters');
-        why.forEach(function (text) { part.appendChild(makeEl('p', null, text.trim())); });
-        main.appendChild(part);
-    }
-    const watch = Array.isArray(s.watch) ? s.watch.filter(function (w) { return w && w.event; }) : [];
-    let rail = null;
-    if (watch.length) {
-        rail = makePart('What to watch next week');
-        rail.classList.add('briefing-review__rail');
-        const ol = makeEl('ol', 'briefing-watch');
-        watch.forEach(function (item) { ol.appendChild(makeWatchItem(item)); });
-        rail.appendChild(ol);
-    }
-
-    const hasMain = main.childNodes.length > 0;
-    if (!hasMain && !rail) return null;
-    // Two columns only when both sides have content, so a review without a
-    // watch list never leaves an empty 38% rail.
-    const review = makeEl('div', 'briefing-review' + (hasMain && rail ? ' briefing-review--with-rail' : ''));
-    if (hasMain) review.appendChild(main);
-    if (rail) review.appendChild(rail);
-    fragment.appendChild(review);
-    return fragment;
-}
+// Formatters and the structured renderer: static/js/components/week-review.js
 
 function renderMarkdownBriefing(narrativeEl, summary) {
     if (typeof marked !== 'undefined') {

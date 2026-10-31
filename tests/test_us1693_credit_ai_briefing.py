@@ -473,8 +473,9 @@ class TestCreditTemplateAISection(unittest.TestCase):
         cls.src = read_template('credit.html')
 
     def test_ai_analysis_section_present(self):
-        self.assertIn('AI Credit Analysis', self.src,
-                      'credit.html must have an "AI Credit Analysis" section heading')
+        # Renamed by US-490.4 (weekly framing)
+        self.assertIn('Credit Week in Review (AI)', self.src,
+                      'credit.html must have a "Credit Week in Review (AI)" section heading')
 
     def test_collapsible_section_for_ai(self):
         self.assertIn('data-section-id="ai-briefing"', self.src,

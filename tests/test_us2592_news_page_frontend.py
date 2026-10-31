@@ -69,7 +69,7 @@ class TestNewsRouteRendering:
 
     def test_page_contains_heading(self, flask_app):
         resp = flask_app.get('/news')
-        assert b"Today's Macro News" in resp.data
+        assert b"This Week's Macro News" in resp.data
 
     def test_empty_state_shown_by_default(self, flask_app):
         resp = flask_app.get('/news')
@@ -98,11 +98,12 @@ class TestAISummaryCard:
         assert 'role="region"' in news_html
 
     def test_aria_label_ai_generated(self, news_html):
-        assert 'AI-generated news summary' in news_html
+        assert 'AI-generated weekly news review' in news_html
 
     def test_ai_summary_label_uppercase_text(self, news_html):
-        # Label text should be 'AI Summary' or 'AI SUMMARY'
-        assert re.search(r'AI\s+SUMMARY|AI\s+Summary', news_html, re.IGNORECASE)
+        # Card label is "✦ Week in Review" since US-490.4 (sparkle is the SVG)
+        assert re.search(r'</svg>\s*Week in Review\s*</h2>', news_html)
+        assert 'AI Summary' not in news_html
 
     def test_ai_sparkle_or_icon_present(self, news_html):
         # Design spec says prefix label with sparkle mark or bi-stars
@@ -113,14 +114,16 @@ class TestAISummaryCard:
         assert 'Generated from' in news_html
 
     def test_sources_count_in_footer(self, news_html):
-        assert 'sources | length' in news_html or '| length' in news_html
+        # N = the de-duplicated count of rendered cards (US-490.4)
+        assert "Generated from {{ source_count }} source{{ 's' if source_count != 1 else '' }} this week" in news_html
 
     def test_summary_card_footer_class(self, news_html):
         assert 'news-summary-card__footer' in news_html
 
     def test_summary_text_rendered_in_paragraph(self, news_html):
-        # summary_text should be inside a <p> tag
-        assert re.search(r'<p[^>]*>.*summary_text.*</p>', news_html, re.DOTALL)
+        # One <p> per blank-line-separated paragraph (US-490.4)
+        assert '{% for paragraph in summary_paragraphs %}' in news_html
+        assert '<p>{{ paragraph }}</p>' in news_html
 
 
 # ─── Source Cards ─────────────────────────────────────────────────────────────
@@ -162,7 +165,7 @@ class TestSourceCards:
 
     def test_sources_section_label_shows_count(self, news_html):
         # SOURCES (X) label
-        assert 'sources | length' in news_html or '| length' in news_html
+        assert 'Sources ({{ source_count }})' in news_html
 
 
 # ─── Empty States ─────────────────────────────────────────────────────────────
@@ -181,7 +184,9 @@ class TestEmptyStates:
         assert 'bi-wifi-off' in news_html
 
     def test_api_unavailable_no_prior_description(self, news_html):
-        assert 'retry' in news_html.lower() or 'tomorrow' in news_html.lower()
+        assert "We couldn't load this week's news and have no earlier review to show.<br>" in news_html
+        assert 'The pipeline retries automatically.' in news_html
+        assert 'tomorrow' not in news_html.lower()
 
     def test_empty_state_class(self, news_html):
         assert 'news-empty-state' in news_html
@@ -196,20 +201,23 @@ class TestStaleBanner:
     def test_stale_banner_class(self, news_html):
         assert 'news-stale-banner' in news_html
 
-    def test_stale_banner_role_alert(self, news_html):
-        assert 'role="alert"' in news_html
+    def test_stale_banner_role_status(self, news_html):
+        # Polite status, not an alert (spec §2, US-490.4)
+        assert '<div class="news-stale-banner" role="status">' in news_html
+        assert 'role="alert"' not in news_html
 
     def test_stale_banner_exclamation_icon(self, news_html):
         assert 'bi-exclamation-triangle' in news_html
 
-    def test_stale_banner_shows_stale_date(self, news_html):
-        assert 'stale_date' in news_html
+    def test_stale_banner_shows_week_label(self, news_html):
+        assert '{% if is_stale and week_label %}' in news_html
 
     def test_stale_banner_conditional_on_is_stale(self, news_html):
         assert 'is_stale' in news_html
 
     def test_stale_banner_message_text(self, news_html):
-        assert "today's fetch is unavailable" in news_html or "fetch is unavailable" in news_html
+        assert "Showing the review for {{ week_label }} — this week's review is on the way." in news_html
+        assert "today's fetch" not in news_html
 
 
 # ─── Security ─────────────────────────────────────────────────────────────────

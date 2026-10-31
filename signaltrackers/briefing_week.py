@@ -9,6 +9,8 @@ covers the Mon-Fri trading week. This module owns:
   the reader's browser clock;
 - the metadata stamped onto every stored briefing (`record_metadata`) and the
   fields the display APIs return (`display_fields`);
+- the week label and stale rule for server-rendered pages
+  (`format_week_label`, `is_stale`);
 - the run context that tells a generator whether it is running inside the
   scheduled weekly job or a manual regenerate (`scheduled_run`), and the
   metering hook that records scheduled AI calls (`meter_ai_call`).
@@ -213,6 +215,66 @@ def display_fields(record: dict, now: datetime | None = None) -> dict:
     except (TypeError, ValueError) as exc:
         logger.warning('[briefing_week] Unreadable week fields on record: %s', exc)
         return empty
+
+
+# ---------------------------------------------------------------------------
+# Labels for server-rendered pages (news page; the weekly email)
+# ---------------------------------------------------------------------------
+
+# A review is stale only when a whole Friday run was missed (spec §2): a
+# normal week, read the next Thursday, is 6-7 days old.
+STALE_AFTER = timedelta(days=8)
+
+# Fixed English names: strftime('%b') follows the process locale.
+_MONTHS = ('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec')
+_WEEKDAYS = ('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')
+
+
+def _iso_day(value) -> date | None:
+    try:
+        return date.fromisoformat(str(value)[:10]) if value else None
+    except ValueError:
+        return None
+
+
+def format_week_label(fields: dict | None) -> str | None:
+    """The week label for `display_fields` output (spec §1).
+
+    "Week of Oct 26–30, 2026", "Week of Oct 29 – Nov 2, 2026",
+    "Week of Dec 29, 2025 – Jan 2, 2026", or "Week to date · through Wed, Nov 4".
+    Mirrors `formatWeekLabel` in static/js/components/week-review.js. Returns
+    None when the record has no usable week, so a page never prints "None".
+    """
+    if not fields:
+        return None
+    start, end = _iso_day(fields.get('week_start')), _iso_day(fields.get('week_end'))
+    if not start or not end:
+        return None
+    if fields.get('week_to_date'):
+        through = _iso_day(fields.get('through')) or end
+        return f'Week to date · through {_WEEKDAYS[through.weekday()]}, {_MONTHS[through.month - 1]} {through.day}'
+    if start.year != end.year:
+        return (f'Week of {_MONTHS[start.month - 1]} {start.day}, {start.year}'
+                f' – {_MONTHS[end.month - 1]} {end.day}, {end.year}')
+    if start.month != end.month:
+        return (f'Week of {_MONTHS[start.month - 1]} {start.day}'
+                f' – {_MONTHS[end.month - 1]} {end.day}, {end.year}')
+    return f'Week of {_MONTHS[start.month - 1]} {start.day}–{end.day}, {end.year}'
+
+
+def is_stale(fields: dict | None, now: datetime | None = None) -> bool:
+    """True when the review was published more than `STALE_AFTER` ago."""
+    raw = (fields or {}).get('published_at')
+    if not raw:
+        return False
+    try:
+        published = datetime.fromisoformat(str(raw).replace('Z', '+00:00'))
+    except ValueError:
+        return False
+    if published.tzinfo is None:
+        published = ET.localize(published)
+    now = to_et(now) if now else now_et()
+    return now - published > STALE_AFTER
 
 
 # ---------------------------------------------------------------------------

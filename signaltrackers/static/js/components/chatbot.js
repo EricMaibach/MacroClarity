@@ -648,7 +648,7 @@ class ChatbotWidget {
                     context: {
                         page: window.location.pathname,
                         section: 'briefing-section',
-                        section_name: 'AI Market Briefing',
+                        section_name: 'Week in Review',
                         briefing_text: briefingText || null
                     }
                 })

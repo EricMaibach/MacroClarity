@@ -11,8 +11,8 @@
 // Map section IDs to human-readable names and opening messages.
 const AI_SECTION_CONTEXTS = {
     'briefing-section': {
-        name: 'AI Market Briefing',
-        opening: "You're reading the **AI Market Briefing** — a daily narrative synthesis of macro conditions, key market moves, and their implications generated from live economic data. What aspect of today's briefing would you like to dig into?",
+        name: 'Week in Review',
+        opening: "You're reading the **Week in Review** — a weekly AI synthesis of what changed in macro conditions, why it matters, and what to watch next week, generated from live economic data. What part of this week's review would you like to dig into?",
     },
     'sector-tone-section': {
         name: 'Sector Management Tone',
