@@ -31,29 +31,24 @@ from services.alert_detection_service import (
 def test_app():
     """Create test application with in-memory database."""
     app.config['TESTING'] = True
-    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
     app.config['WTF_CSRF_ENABLED'] = False
 
     with app.app_context():
+        # The database is the in-memory one from tests/conftest.py (#497).
+        # Reset it so each test starts empty, and leave the schema in place
+        # for tests that run after this one.
+        db.drop_all()
         db.create_all()
         yield app
         db.session.remove()
         db.drop_all()
+        db.create_all()
 
 
 @pytest.fixture
 def test_user(test_app):
     """Create a test user with alert preferences."""
     with test_app.app_context():
-        # Check if user already exists
-        user = User.query.filter_by(email='test@example.com').first()
-        if user:
-            # Clean up existing data
-            Alert.query.filter_by(user_id=user.id).delete()
-            AlertPreference.query.filter_by(user_id=user.id).delete()
-            db.session.delete(user)
-            db.session.commit()
-
         user = User(username='testuser', email='test@example.com')
         user.set_password('TestPass123')
         db.session.add(user)

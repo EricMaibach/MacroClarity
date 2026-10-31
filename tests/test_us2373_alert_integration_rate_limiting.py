@@ -88,13 +88,17 @@ if _FLASK_STACK_AVAILABLE:
     @pytest.fixture
     def test_app():
         app.config['TESTING'] = True
-        app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
         app.config['WTF_CSRF_ENABLED'] = False
         with app.app_context():
+            # The database is the in-memory one from tests/conftest.py (#497).
+            # Reset it so each test starts empty, and leave the schema in place
+            # for tests that run after this one.
+            db.drop_all()
             db.create_all()
             yield app
             db.session.remove()
             db.drop_all()
+            db.create_all()
 
     @pytest.fixture
     def user_with_prefs(test_app):
