@@ -614,12 +614,6 @@ footer {
     100% { background-position: -200% 0; }
 }
 
-/* Outdated Warning */
-.briefing-outdated-warning {
-    color: #856404;
-    font-weight: 500;
-}
-
 
 /* Responsive Styles */
 @media (max-width: 992px) {

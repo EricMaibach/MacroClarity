@@ -56,15 +56,15 @@
 {% include '_conditions_strip.html' %}
 
 {# ════════════════════════════════════════════════════════════════════════
-   §0: AI BRIEFING — the daily draw
+   §0: WEEK IN REVIEW — the weekly draw
    ════════════════════════════════════════════════════════════════════════ #}
-<section id="briefing-section" class="conditions-briefing mb-4" aria-label="Daily Briefing">
-    <div class="section-header mb-3">
+<section id="briefing-section" class="conditions-briefing mb-4" aria-label="Week in Review">
+    <div class="section-header conditions-briefing__header mb-3">
         <h3 class="section-title">
-            <i class="bi bi-newspaper me-2"></i>DAILY BRIEFING
+            <i class="bi bi-newspaper me-2"></i>WEEK IN REVIEW
         </h3>
-        <span class="conditions-briefing__date" id="briefing-date">--</span>
-        {% if current_user.is_authenticated %}<button class="btn ai-section-btn" data-section-id="briefing-section" aria-label="Ask AI about Daily Briefing"><svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect x="2" y="14" width="4" height="8" rx="1" fill="#A5B4FC"/><rect x="8" y="10" width="4" height="12" rx="1" fill="#818CF8"/><rect x="14" y="6" width="4" height="16" rx="1" fill="#6366F1"/><path d="M21,2 L22,4.5 L24.5,5.5 L22,6.5 L21,9 L20,6.5 L17.5,5.5 L20,4.5 Z" fill="#F59E0B"/></svg><span aria-hidden="true">AI</span></button>{% endif %}
+        <time class="conditions-briefing__date briefing-week-label" id="briefing-date" hidden></time>
+        {% if current_user.is_authenticated %}<button class="btn ai-section-btn" data-section-id="briefing-section" aria-label="Ask AI about this week's review"><svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect x="2" y="14" width="4" height="8" rx="1" fill="#A5B4FC"/><rect x="8" y="10" width="4" height="12" rx="1" fill="#818CF8"/><rect x="14" y="6" width="4" height="16" rx="1" fill="#6366F1"/><path d="M21,2 L22,4.5 L24.5,5.5 L22,6.5 L21,9 L20,6.5 L17.5,5.5 L20,4.5 Z" fill="#F59E0B"/></svg><span aria-hidden="true">AI</span></button>{% endif %}
     </div>
 
     <div class="conditions-briefing__card">
@@ -74,10 +74,11 @@
                 <div class="spinner-border spinner-border-sm text-primary me-2" role="status">
                     <span class="visually-hidden">Loading...</span>
                 </div>
-                <span class="text-muted">Loading today's briefing...</span>
+                <span class="text-muted">Loading this week's review...</span>
             </div>
             <div class="skeleton-line skeleton-line-full mb-2"></div>
             <div class="skeleton-line skeleton-line-full mb-2"></div>
+            <div class="skeleton-line skeleton-line-75 mb-2"></div>
             <div class="skeleton-line skeleton-line-75 mb-3"></div>
         </div>
 
@@ -92,7 +93,7 @@
         <div id="briefing-error" style="display: none;">
             <div class="alert alert-warning mb-0">
                 <i class="bi bi-exclamation-triangle me-2"></i>
-                <span id="briefing-error-message">Market briefing is being generated. Check back shortly.</span>
+                <span id="briefing-error-message">This week's review isn't ready yet. Check back shortly.</span>
                 <button class="btn btn-sm btn-outline-primary ms-3" onclick="loadAISummary()">
                     <i class="bi bi-arrow-clockwise me-1"></i>Retry
                 </button>
@@ -100,11 +101,13 @@
         </div>
     </div>
 
+    <div class="briefing-stale-notice" id="briefing-stale" role="status" hidden>⚠ This review is from an earlier week. A new one is on the way.</div>
+
     <div class="conditions-briefing__footer">
         <small class="text-muted" id="briefing-attribution">
-            <svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="margin-right:4px;vertical-align:-2px"><path d="M8,1 L9.2,5.2 L13.5,6.5 L9.2,7.8 L8,12 L6.8,7.8 L2.5,6.5 L6.8,5.2 Z" fill="#6366F1"/></svg>AI-generated based on current market data
+            <svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="margin-right:4px;vertical-align:-2px"><path d="M8,1 L9.2,5.2 L13.5,6.5 L9.2,7.8 L8,12 L6.8,7.8 L2.5,6.5 L6.8,5.2 Z" fill="#6366F1"/></svg>AI-generated from this week's market data
         </small>
-        <small class="text-muted" id="briefing-timestamp">Generated: --</small>
+        <small class="text-muted" id="briefing-timestamp"></small>
     </div>
     {# Discoverability hints — desktop and mobile copies #}
     <div class="ai-briefing-hints">
@@ -750,8 +753,155 @@
 {% block extra_js %}
 <script>
 {# ════════════════════════════════════════════════════════════════
-   AI Briefing loader (same AJAX pattern as before)
+   Week in Review loader (US-490.3)
+   Week label and footer dates come from the server's ET week fields
+   (week_start, week_end, through, published_at, next_review_at). They
+   are formatted from their YYYY-MM-DD parts, never through the browser
+   clock: new Date('2026-10-30') is Oct 29 in any US timezone.
    ════════════════════════════════════════════════════════════════ #}
+const BRIEFING_ERROR_COPY = "This week's review isn't ready yet. Check back shortly.";
+const BRIEFING_STALE_MS = 8 * 24 * 60 * 60 * 1000;
+const WEEK_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const WEEK_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const WATCH_DAY_NAMES = { Mon: 'Monday', Tue: 'Tuesday', Wed: 'Wednesday', Thu: 'Thursday', Fri: 'Friday' };
+
+// "2026-10-30" or "2026-10-30T17:45:00-04:00" → {y, m, d, dow}; the date part
+// of an ET timestamp is already the ET calendar day.
+function parseWeekDate(value) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(value || '');
+    if (!m) return null;
+    const y = +m[1], mo = +m[2] - 1, d = +m[3];
+    return { y: y, m: mo, d: d, dow: new Date(Date.UTC(y, mo, d)).getUTCDay(), iso: m[0] };
+}
+
+function formatShortDay(p) {
+    return WEEK_DAYS[p.dow] + ', ' + WEEK_MONTHS[p.m] + ' ' + p.d;
+}
+
+// "Week of Oct 26–30, 2026" / "Week of Oct 29 – Nov 2, 2026" /
+// "Week of Dec 29, 2025 – Jan 2, 2026" / "Week to date · through Wed, Nov 4"
+function formatWeekLabel(data) {
+    const start = parseWeekDate(data.week_start);
+    const end = parseWeekDate(data.week_end);
+    if (!start || !end) return null;
+    if (data.week_to_date) {
+        const through = parseWeekDate(data.through) || end;
+        return 'Week to date · through ' + formatShortDay(through);
+    }
+    if (start.y !== end.y) {
+        return 'Week of ' + WEEK_MONTHS[start.m] + ' ' + start.d + ', ' + start.y +
+            ' – ' + WEEK_MONTHS[end.m] + ' ' + end.d + ', ' + end.y;
+    }
+    if (start.m !== end.m) {
+        return 'Week of ' + WEEK_MONTHS[start.m] + ' ' + start.d +
+            ' – ' + WEEK_MONTHS[end.m] + ' ' + end.d + ', ' + end.y;
+    }
+    return 'Week of ' + WEEK_MONTHS[start.m] + ' ' + start.d + '–' + end.d + ', ' + end.y;
+}
+
+// "Published Fri, Oct 30 · Next review Fri, Nov 6" (or "Updated …" after a manual regenerate)
+function formatFreshness(data) {
+    const published = parseWeekDate(data.published_at);
+    const next = parseWeekDate(data.next_review_at);
+    const parts = [];
+    if (published) {
+        parts.push((data.run_type === 'scheduled' ? 'Published ' : 'Updated ') + formatShortDay(published));
+    }
+    if (next) parts.push('Next review ' + formatShortDay(next));
+    return parts.join(' · ');
+}
+
+// Stale only when a whole Friday run was missed. Absolute timestamps, so the
+// reader's timezone does not matter; "now" is the browser clock.
+function isBriefingStale(data) {
+    const published = Date.parse(data.published_at || '');
+    return !isNaN(published) && (Date.now() - published) > BRIEFING_STALE_MS;
+}
+
+function makeEl(tag, className, text) {
+    const el = document.createElement(tag);
+    if (className) el.className = className;
+    if (text !== undefined) el.textContent = text;
+    return el;
+}
+
+function makePart(label) {
+    const part = makeEl('div', 'briefing-part');
+    part.appendChild(makeEl('h4', 'briefing-part__label', label));
+    return part;
+}
+
+function makeWatchItem(item) {
+    const li = makeEl('li', 'briefing-watch__item');
+    const chip = makeEl('span', 'briefing-watch__day');
+    if (item.day === 'Ongoing') {
+        chip.setAttribute('aria-label', 'Ongoing');
+        chip.appendChild(makeEl('span', null, '—')).setAttribute('aria-hidden', 'true');
+        chip.appendChild(makeEl('span', 'visually-hidden', 'Ongoing: '));
+    } else {
+        chip.appendChild(makeEl('span', null, item.day)).setAttribute('aria-hidden', 'true');
+        chip.appendChild(makeEl('span', 'visually-hidden', (WATCH_DAY_NAMES[item.day] || item.day) + ': '));
+    }
+    li.appendChild(chip);
+    const text = makeEl('span', 'briefing-watch__text');
+    text.appendChild(makeEl('span', 'briefing-watch__event', item.event || ''));
+    if (item.reason) text.appendChild(makeEl('span', 'briefing-watch__reason', item.reason));
+    li.appendChild(text);
+    return li;
+}
+
+// Builds the headline + three parts with textContent only, so model output is
+// never parsed as HTML. Renders whichever parts exist; returns null if none do.
+function buildStructuredReview(s) {
+    const fragment = document.createDocumentFragment();
+    if (s.headline) fragment.appendChild(makeEl('p', 'briefing-headline', s.headline));
+
+    const main = makeEl('div', 'briefing-review__main');
+    const changed = Array.isArray(s.changed) ? s.changed.filter(Boolean) : [];
+    if (changed.length) {
+        const part = makePart('What changed');
+        const ul = makeEl('ul', 'briefing-changed');
+        changed.forEach(function (text) { ul.appendChild(makeEl('li', null, text)); });
+        part.appendChild(ul);
+        main.appendChild(part);
+    }
+    const why = typeof s.why === 'string' ? s.why.split(/\n\s*\n/).filter(function (p) { return p.trim(); }) : [];
+    if (why.length) {
+        const part = makePart('Why it matters');
+        why.forEach(function (text) { part.appendChild(makeEl('p', null, text.trim())); });
+        main.appendChild(part);
+    }
+    const watch = Array.isArray(s.watch) ? s.watch.filter(function (w) { return w && w.event; }) : [];
+    let rail = null;
+    if (watch.length) {
+        rail = makePart('What to watch next week');
+        rail.classList.add('briefing-review__rail');
+        const ol = makeEl('ol', 'briefing-watch');
+        watch.forEach(function (item) { ol.appendChild(makeWatchItem(item)); });
+        rail.appendChild(ol);
+    }
+
+    const hasMain = main.childNodes.length > 0;
+    if (!hasMain && !rail) return null;
+    // Two columns only when both sides have content, so a review without a
+    // watch list never leaves an empty 38% rail.
+    const review = makeEl('div', 'briefing-review' + (hasMain && rail ? ' briefing-review--with-rail' : ''));
+    if (hasMain) review.appendChild(main);
+    if (rail) review.appendChild(rail);
+    fragment.appendChild(review);
+    return fragment;
+}
+
+function renderMarkdownBriefing(narrativeEl, summary) {
+    if (typeof marked !== 'undefined') {
+        marked.setOptions({ breaks: true, gfm: true, sanitize: false });
+        narrativeEl.innerHTML = marked.parse(summary);
+    } else {
+        const paragraphs = summary.split('\n\n').filter(p => p.trim());
+        narrativeEl.innerHTML = paragraphs.map(p => '<p>' + p + '</p>').join('');
+    }
+}
+
 async function loadAISummary() {
     const loadingEl = document.getElementById('briefing-loading');
     const contentEl = document.getElementById('briefing-content');
@@ -759,51 +909,44 @@ async function loadAISummary() {
     const narrativeEl = document.getElementById('briefing-narrative');
     const timestampEl = document.getElementById('briefing-timestamp');
     const dateEl = document.getElementById('briefing-date');
+    const staleEl = document.getElementById('briefing-stale');
     const errorMsgEl = document.getElementById('briefing-error-message');
 
     try {
         loadingEl.style.display = 'block';
         contentEl.style.display = 'none';
         errorEl.style.display = 'none';
+        staleEl.hidden = true;
 
         const response = await fetch('/api/ai-summary');
         const data = await response.json();
 
-        if (data.error) {
+        if (!response.ok || data.error) {
             loadingEl.style.display = 'none';
             errorEl.style.display = 'block';
-            errorMsgEl.textContent = data.error || 'Market briefing is being generated. Check back shortly.';
+            errorMsgEl.textContent = BRIEFING_ERROR_COPY;
             return;
         }
 
         if (data.summary) {
-            if (typeof marked !== 'undefined') {
-                marked.setOptions({ breaks: true, gfm: true, sanitize: false });
-                narrativeEl.innerHTML = marked.parse(data.summary);
+            const structured = data.format === 'structured' && data.structured
+                ? buildStructuredReview(data.structured) : null;
+            if (structured) {
+                narrativeEl.replaceChildren(structured);
             } else {
-                const paragraphs = data.summary.split('\n\n').filter(p => p.trim());
-                narrativeEl.innerHTML = paragraphs.map(p => '<p>' + p + '</p>').join('');
+                renderMarkdownBriefing(narrativeEl, data.summary);
             }
 
-            if (data.generated_at) {
-                const genDate = new Date(data.generated_at);
-                const now = new Date();
-                const hoursDiff = (now - genDate) / (1000 * 60 * 60);
-                const timeStr = genDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
-
-                if (hoursDiff > 24) {
-                    timestampEl.innerHTML = '<span class="briefing-outdated-warning"><i class="bi bi-exclamation-triangle me-1"></i>Briefing may be outdated</span> · Generated: ' + timeStr;
-                } else {
-                    timestampEl.textContent = 'Generated: ' + timeStr;
-                }
-
-                const dateStr = genDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-                dateEl.textContent = dateStr;
+            const label = formatWeekLabel(data);
+            dateEl.textContent = label || '';
+            dateEl.hidden = !label;
+            if (label) {
+                dateEl.setAttribute('datetime', data.week_start + '/' + data.week_end);
             } else {
-                const today = new Date();
-                dateEl.textContent = today.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-                timestampEl.textContent = 'Generated: --';
+                dateEl.removeAttribute('datetime');
             }
+            timestampEl.textContent = formatFreshness(data);
+            staleEl.hidden = !isBriefingStale(data);
 
             loadingEl.style.display = 'none';
             contentEl.style.display = 'block';
@@ -814,7 +957,7 @@ async function loadAISummary() {
         console.error('Error loading AI summary:', error);
         loadingEl.style.display = 'none';
         errorEl.style.display = 'block';
-        errorMsgEl.textContent = 'Market briefing is being generated. Check back shortly.';
+        errorMsgEl.textContent = BRIEFING_ERROR_COPY;
     }
 }
 

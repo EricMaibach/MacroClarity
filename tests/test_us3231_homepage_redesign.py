@@ -121,7 +121,7 @@ class TestBriefingSection(unittest.TestCase):
             resp = c.get('/')
             html = resp.data.decode()
             self.assertIn('id="briefing-section"', html)
-            self.assertIn('DAILY BRIEFING', html)
+            self.assertIn('WEEK IN REVIEW', html)
 
     @patch('dashboard.get_recession_probability', return_value=None)
     @patch('dashboard.get_conditions_history', return_value={})

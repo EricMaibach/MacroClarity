@@ -26,6 +26,8 @@
     let dismissTimer = null;
     let activeSentence = null;
 
+    const TEXT_BLOCK_SELECTOR = 'p, li, .briefing-watch__event, .briefing-watch__reason';
+
     function init() {
         confirmPill = document.getElementById('ai-briefing-confirm-pill');
         if (!confirmPill) return;
@@ -59,9 +61,17 @@
         if (container.querySelector('.ai-sentence')) return;
         if (!container.innerText.trim()) return;
 
-        const paragraphs = container.querySelectorAll('p');
-        if (paragraphs.length > 0) {
-            paragraphs.forEach(wrapParagraph);
+        // Each paragraph, list item and watch-item text is tokenized on its
+        // own, so a tap never merges two bullets into one "sentence". Blocks
+        // that contain another text block (a watch <li> with its chip, a
+        // loose-list <li> holding <p>s) are left to their children, because
+        // wrapping replaces the element's markup.
+        const blocks = Array.prototype.filter.call(
+            container.querySelectorAll(TEXT_BLOCK_SELECTOR),
+            function (el) { return !el.querySelector(TEXT_BLOCK_SELECTOR); }
+        );
+        if (blocks.length > 0) {
+            blocks.forEach(wrapParagraph);
         } else {
             wrapParagraph(container);
         }
