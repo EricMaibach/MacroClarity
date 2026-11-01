@@ -14,10 +14,10 @@
         <div class="news-header__title-row">
             <h1 class="news-header__title">
                 <i class="bi bi-newspaper" aria-hidden="true"></i>
-                Today's Macro News
+                This Week's Macro News
             </h1>
-            {% if summary_date %}
-            <p class="news-header__date">{{ summary_date.strftime('%B %-d, %Y') }}</p>
+            {% if week_label %}
+            <time class="news-header__date" datetime="{{ news_week.week_start }}/{{ news_week.week_end }}">{{ week_label }}</time>
             {% endif %}
         </div>
     </div>
@@ -25,11 +25,11 @@
     <!-- Conditions Strip -->
     {% include '_conditions_strip.html' %}
 
-    <!-- Stale Data Warning -->
-    {% if is_stale and stale_date %}
-    <div class="news-stale-banner" role="alert">
+    <!-- Stale notice: only when a whole Friday run was missed (8-day rule) -->
+    {% if is_stale and week_label %}
+    <div class="news-stale-banner" role="status">
         <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
-        Showing news from {{ stale_date.strftime('%B %-d, %Y') }} — today's fetch is unavailable.
+        Showing the review for {{ week_label }} — this week's review is on the way.
     </div>
     {% endif %}
 
@@ -37,70 +37,83 @@
     <!-- Two-column layout (desktop) / stacked (mobile) -->
     <div class="news-layout">
 
-        <!-- AI Summary -->
-        <section class="news-summary-card" role="region" aria-label="AI-generated news summary">
+        <!-- AI Week in Review -->
+        <section class="news-summary-card" role="region" aria-label="AI-generated weekly news review">
             <h2 class="news-summary-card__label">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" style="display:inline-block;vertical-align:middle;margin-right:4px">
                     <path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6L12 2z" fill="currentColor"/>
                 </svg>
-                AI Summary
+                Week in Review
             </h2>
             <div class="news-summary-card__body">
-                <p>{{ summary_text }}</p>
+                {% for paragraph in summary_paragraphs %}
+                <p>{{ paragraph }}</p>
+                {% endfor %}
             </div>
             <div class="news-summary-card__footer">
-                Generated from {{ sources | length }} source{{ 's' if sources | length != 1 else '' }}
+                Generated from {{ source_count }} source{{ 's' if source_count != 1 else '' }} this week
             </div>
         </section>
 
-        <!-- Sources -->
-        {% if sources %}
+        <!-- Sources, grouped by the ET day they were fetched -->
+        {% if source_groups %}
         <section class="news-sources" aria-label="Source articles">
-            <h2 class="news-sources__label">Sources ({{ sources | length }})</h2>
+            <h2 class="news-sources__label">Sources ({{ source_count }})</h2>
+            {% for group in source_groups %}
+            <h3 class="news-sources__day">{{ group.label }}</h3>
             <div class="news-sources__list">
-                {% for source in sources %}
+                {% for source in group.articles %}
+                {% if source.href %}
                 <a class="news-source-card"
-                   href="{{ source.url }}"
+                   href="{{ source.href }}"
                    target="_blank"
                    rel="noopener noreferrer"
                    aria-label="Read: {{ source.headline }} (opens in new tab)">
+                {% else %}
+                <div class="news-source-card news-source-card--no-link">
+                {% endif %}
                     <div class="news-source-card__content">
                         <span class="news-source-card__headline">{{ source.headline }}</span>
                         <span class="news-source-card__meta">
-                            {{ extract_domain(source.url) }}
+                            {{ extract_domain(source.url) if source.href else (source.source or '') }}
                             {% if source.timestamp %}
                             &middot; {{ source.timestamp }}
                             {% endif %}
                         </span>
                     </div>
+                {% if source.href %}
                     <i class="bi bi-arrow-up-right news-source-card__arrow" aria-hidden="true"></i>
                 </a>
+                {% else %}
+                </div>
+                {% endif %}
                 {% endfor %}
             </div>
+            {% endfor %}
         </section>
         {% endif %}
 
     </div>
 
-    {% elif is_stale %}
-    <!-- API unavailable, no prior data -->
+    {% elif empty_state == 'unavailable' %}
+    <!-- A review was published before, but none is recent enough to show -->
     <div class="news-empty-state">
         <i class="bi bi-wifi-off news-empty-state__icon" aria-hidden="true"></i>
         <h2 class="news-empty-state__heading">News unavailable</h2>
         <p class="news-empty-state__body">
-            We couldn't fetch today's news and have no prior summary to display.<br>
-            The pipeline will retry automatically tomorrow.
+            We couldn't load this week's news and have no earlier review to show.<br>
+            The pipeline retries automatically.
         </p>
     </div>
 
     {% else %}
-    <!-- No data fetched yet -->
+    <!-- No weekly review published yet -->
     <div class="news-empty-state">
         <i class="bi bi-newspaper news-empty-state__icon" aria-hidden="true"></i>
         <h2 class="news-empty-state__heading">No news yet</h2>
         <p class="news-empty-state__body">
-            The daily macro news pipeline hasn't run yet.<br>
-            Check back tomorrow morning.
+            The first weekly news review hasn't been published yet.<br>
+            It arrives after Friday's close.
         </p>
     </div>
     {% endif %}

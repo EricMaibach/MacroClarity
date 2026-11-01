@@ -143,7 +143,7 @@ HOMEPAGE_SECTIONS = [
     ('sector-tone-section', 'Sector Management Tone'),
     ('market-conditions', 'Market Conditions at a Glance'),
     ('trade-pulse-section', 'Global Trade Pulse'),
-    ('briefing-section', 'AI Market Briefing'),
+    ('briefing-section', "this week's review"),
     ('movers-section', "What's Moving Today"),
     ('signals-section', 'Cross-Market Indicators'),
 ]

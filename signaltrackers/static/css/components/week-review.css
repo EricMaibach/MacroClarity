@@ -1,0 +1,165 @@
+/**
+ * Week in Review — shared AI review components (US-490.3, US-490.4)
+ * Spec: docs/specs/weekly-week-in-review.md §1, §2, §4, §5, §7
+ *
+ * Loaded by the homepage and the five section pages. Literal values only:
+ * the --space-* and color tokens are defined per page template and are not
+ * available everywhere, so a --space-5 reference would silently resolve to nothing.
+ */
+
+/* Week label (spec §1) */
+.briefing-week-label {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #697386;
+}
+.briefing-week-label[hidden] {
+    display: none;
+}
+
+/* Part labels (spec §4): sentence case in the DOM, uppercase via CSS */
+.briefing-part__label {
+    font-family: var(--font-interface);
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: #697386;
+    margin: 0 0 0.5rem; /* --space-2 */
+}
+.briefing-part + .briefing-part {
+    margin-top: 1.5rem; /* --space-5 */
+}
+
+/* What changed (spec §5) */
+.briefing-changed {
+    margin: 0;
+    padding-left: 1.25rem;
+}
+.briefing-changed li {
+    font-size: 1rem;
+    line-height: 1.6;
+    color: #334155;
+}
+.briefing-changed li + li {
+    margin-top: 0.5rem;
+}
+.briefing-changed li::marker {
+    color: #9AA5B1;
+}
+
+/* Watch list (spec §7) */
+.briefing-watch {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+.briefing-watch__item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+}
+.briefing-watch__item + .briefing-watch__item {
+    margin-top: 12px;
+}
+.briefing-watch__day {
+    flex: 0 0 44px;
+    min-height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: #DBEAFE;
+    color: #1E40AF;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    border-radius: 6px;
+}
+.briefing-watch__text {
+    min-width: 0;
+}
+.briefing-watch__event {
+    display: block;
+    font-size: 0.9375rem;
+    font-weight: 600;
+    line-height: 1.4;
+    color: #1A202C;
+}
+.briefing-watch__reason {
+    display: block;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    color: #4A5568;
+}
+
+/* Section-page inline form: "WED FOMC decision — reason", no chip, any width */
+.briefing-watch--inline .briefing-watch__item {
+    display: block;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    color: #4A5568;
+}
+.briefing-watch--inline .briefing-watch__item + .briefing-watch__item {
+    margin-top: 8px;
+}
+.briefing-watch__day-inline {
+    font-weight: 700;
+    text-transform: uppercase;
+    color: #1A202C;
+}
+.briefing-watch--inline .briefing-watch__event {
+    display: inline;
+    font-size: inherit;
+    font-weight: inherit; /* only the day is <strong> in the inline form */
+    line-height: inherit;
+    color: inherit;
+}
+
+/* Stale notice (spec §2): only when published more than 8 days ago */
+.briefing-stale-notice {
+    margin-top: 0.75rem;
+    padding: 8px 12px;
+    border-radius: 6px;
+    background: #FEF3C7;
+    color: #92400E;
+    font-size: 0.875rem;
+}
+.briefing-stale-notice[hidden] {
+    display: none;
+}
+
+/* ─── Section pages (spec "Section page briefing") ─────────────────── */
+
+/* Compact range in the collapsed header: ≥768px only, so the title stays on
+   one line on mobile. display:none, not clipping, so it is not read either. */
+.collapsible-section__range {
+    display: none;
+}
+@media (min-width: 768px) {
+    .collapsible-section__range:not([hidden]) {
+        display: inline;
+        flex: 0 0 auto;
+        margin-left: 12px;
+        font-size: 0.875rem;
+        font-weight: 500;
+        color: #697386;
+        white-space: nowrap;
+    }
+}
+
+.section-review__week {
+    display: block;
+    margin-bottom: 1rem; /* --space-4 */
+}
+.section-review__week[hidden] {
+    display: none;
+}
+
+.section-review__footer {
+    margin-top: 0.75rem; /* --space-3 */
+    font-size: 0.75rem;
+    color: #697386;
+}
+.section-review__footer:empty {
+    display: none;
+}

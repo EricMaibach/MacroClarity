@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Daily macro intelligence briefings for individual investors. Track credit, equities, rates, safe havens, crypto, and currency markets in one dashboard.">
+    <meta name="description" content="Weekly macro intelligence briefings for individual investors. Track credit, equities, rates, safe havens, crypto, and currency markets in one dashboard.">
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <!-- Favicons -->
     <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='img/favicon.ico') }}">
@@ -12,7 +12,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='img/apple-touch-icon.png') }}">
     <!-- Open Graph -->
     <meta property="og:title" content="MacroClarity - Macro Finance Data & Analysis">
-    <meta property="og:description" content="Daily macro intelligence briefings for individual investors. Track credit, equities, rates, safe havens, crypto, and currency markets in one dashboard.">
+    <meta property="og:description" content="Weekly macro intelligence briefings for individual investors. Track credit, equities, rates, safe havens, crypto, and currency markets in one dashboard.">
     <meta property="og:image" content="{{ request.url_root.rstrip('/') }}{{ url_for('static', filename='img/og-image.png') }}">
     <meta property="og:type" content="website">
     <title>{% block title %}MacroClarity - Macro Finance Data & Analysis{% endblock %}</title>
@@ -397,7 +397,7 @@
                         setRefreshing(false);
 
                         if (data.last_run.success) {
-                            showToast('Refresh Complete', 'Data and AI briefings updated successfully!', true);
+                            showToast('Refresh Complete', 'Market data updated.', true);
                             // Auto-hide success toast after 3 seconds
                             setTimeout(() => {
                                 toast.hide();

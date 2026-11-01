@@ -6,6 +6,7 @@
 <!-- Component Styles -->
 <link rel="stylesheet" href="{{ url_for('static', filename='css/components/chart-container.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/components/collapsible-section.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/components/week-review.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/components/key-stats-panel.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/components/asset-page-header.css') }}">
 <style>
@@ -305,23 +306,26 @@
         </aside>
     </div>
 
-    <!-- Collapsible Section: AI Crypto Briefing -->
+    <!-- Collapsible Section: AI Week in Review -->
     <div class="collapsible-section" data-collapsed="true" data-section-id="ai-briefing">
         <button class="collapsible-section__header" aria-expanded="false">
-            <h2 class="collapsible-section__title"><i class="bi bi-chat-square-text-fill"></i> Daily Bitcoin Briefing (AI)</h2>
+            <h2 class="collapsible-section__title"><i class="bi bi-chat-square-text-fill"></i> Bitcoin Week in Review (AI)</h2>
+            <time class="collapsible-section__range" id="crypto-review-range" hidden></time>
             <svg class="collapsible-section__icon" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
                 <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
             </svg>
         </button>
         <div class="collapsible-section__content" hidden>
             <div style="background: white; padding: var(--space-4); border-radius: 8px;">
-                <div id="crypto-summary-content" class="summary-text">
-                    <p class="text-muted mb-0"><i class="bi bi-hourglass-split"></i> Loading daily briefing...</p>
+                <time class="briefing-week-label section-review__week" id="crypto-review-week" hidden></time>
+                <div id="crypto-summary-content" class="summary-text section-review">
+                    <p class="text-muted mb-0"><i class="bi bi-hourglass-split"></i> Loading this week's review...</p>
                 </div>
                 <div id="crypto-summary-error" class="text-muted d-none">
-                    <p class="mb-0"><i class="bi bi-info-circle"></i> No briefing available yet. Click "Reload Data" on the main dashboard to generate one.</p>
+                    <p class="mb-0"><i class="bi bi-info-circle"></i> No review yet. The next one publishes after Friday's close.</p>
                 </div>
-                <div id="crypto-summary-timestamp" style="margin-top: var(--space-3); font-size: var(--text-xs); color: var(--neutral-500);"></div>
+                <div class="briefing-stale-notice" id="crypto-review-stale" role="status" hidden>⚠ This review is from an earlier week. A new one is on the way.</div>
+                <div id="crypto-summary-timestamp" class="section-review__footer"></div>
             </div>
         </div>
     </div>
@@ -501,6 +505,7 @@
 {% endblock %}
 
 {% block extra_js %}
+<script src="{{ url_for('static', filename='js/components/week-review.js') }}"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 <script>
 let recessionData = [];
@@ -597,44 +602,9 @@ function getTimeUnit(startDate, endDate) {
     return 'year';
 }
 
-// Load crypto summary
-async function loadCryptoSummary() {
-    try {
-        const response = await fetch('/api/crypto-summary');
-        const data = await response.json();
-
-        const contentDiv = document.getElementById('crypto-summary-content');
-        const errorDiv = document.getElementById('crypto-summary-error');
-        const timestampDiv = document.getElementById('crypto-summary-timestamp');
-
-        if (data.error) {
-            contentDiv.classList.add('d-none');
-            errorDiv.classList.remove('d-none');
-            return;
-        }
-
-        if (typeof marked !== 'undefined') {
-            marked.setOptions({ breaks: true, gfm: true, sanitize: false });
-            contentDiv.innerHTML = marked.parse(data.summary);
-        } else {
-            contentDiv.innerHTML = data.summary
-                .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-                .replace(/\*(.+?)\*/g, '<em>$1</em>')
-                .replace(/\n/g, '<br>');
-        }
-
-        if (data.generated_at) {
-            const genDate = new Date(data.generated_at);
-            const dateStr = genDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-            const timeStr = genDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-            timestampDiv.textContent = `Generated: ${dateStr} at ${timeStr}`;
-        }
-
-    } catch (error) {
-        console.error('Error loading crypto summary:', error);
-        document.getElementById('crypto-summary-content').classList.add('d-none');
-        document.getElementById('crypto-summary-error').classList.remove('d-none');
-    }
+// Load the AI week in review (shared loader: static/js/components/week-review.js)
+function loadCryptoSummary() {
+    return loadSectionReview('crypto', '/api/crypto-summary');
 }
 
 // Load all metrics data

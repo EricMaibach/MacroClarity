@@ -2405,29 +2405,30 @@ def property_macro():
 
 @app.route('/news')
 def news():
-    """Daily macro news summary page."""
+    """Weekly macro news review page (US-490.4)."""
     from urllib.parse import urlparse
-    from news_pipeline import get_stored_news
+    from news_pipeline import get_stored_news, has_published_review
+    import news_display
 
     stored = get_stored_news()
-    today_str = _date.today().isoformat()
+    summary_text = stored.get('summary') if stored else None
 
-    if stored:
-        summary_text = stored.get('summary')
-        sources = stored.get('articles', [])
-        record_date_str = stored.get('date', '')
-        try:
-            summary_date = _date.fromisoformat(record_date_str)
-        except (ValueError, TypeError):
-            summary_date = None
-        is_stale = bool(record_date_str and record_date_str != today_str)
-        stale_date = summary_date if is_stale else None
+    if summary_text:
+        week = briefing_week.display_fields(stored)
+        week_label = briefing_week.format_week_label(week)
+        source_groups = news_display.group_sources_by_day(stored.get('articles'))
+        # 8-day rule: a review read the Thursday after it was published is
+        # current, not stale; only a missed Friday run shows the banner.
+        is_stale = briefing_week.is_stale(week)
+        empty_state = None
     else:
-        summary_text = None
-        sources = []
-        summary_date = None
+        week = None
+        week_label = None
+        source_groups = []
         is_stale = False
-        stale_date = None
+        # A review has been published before but nothing recent enough exists
+        # to show, versus the pipeline never having published one.
+        empty_state = 'unavailable' if has_published_review() else 'never_run'
 
     # Domain extraction helper passed to template context
     def extract_domain(url):
@@ -2442,12 +2443,13 @@ def news():
     return render_template(
         'news.html',
         summary_text=summary_text,
-        sources=sources,
-        summary_date=summary_date,
+        summary_paragraphs=news_display.summary_paragraphs(summary_text),
+        source_groups=source_groups,
+        source_count=news_display.source_count(source_groups),
+        news_week=week,
+        week_label=week_label,
         is_stale=is_stale,
-        stale_date=stale_date,
-        # Week fields for the weekly framing (US-490.4 renders them)
-        news_week=briefing_week.display_fields(stored) if stored else None,
+        empty_state=empty_state,
         extract_domain=extract_domain,
     )
 
@@ -3849,7 +3851,7 @@ _SECTION_OPENING_ALLOWED = {
 }
 
 _SECTION_NAMES = {
-    'briefing-section': 'AI Market Briefing',
+    'briefing-section': 'Week in Review',
     'sector-tone-section': 'Sector Management Tone',
     'market-conditions': 'Market Conditions at a Glance',
     'movers-section': "What's Moving Today",

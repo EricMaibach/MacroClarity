@@ -27,6 +27,9 @@ SIGNALTRACKERS_DIR = REPO_ROOT / 'signaltrackers'
 INDEX_HTML = SIGNALTRACKERS_DIR / 'templates' / 'index.html'
 MOBILE_JS = SIGNALTRACKERS_DIR / 'static' / 'js' / 'components' / 'ai-briefing-mobile.js'
 SUMMARY_CSS = SIGNALTRACKERS_DIR / 'static' / 'css' / 'components' / 'conditions-summary.css'
+# Shared with the section pages since US-490.4
+WEEK_REVIEW_CSS = SIGNALTRACKERS_DIR / 'static' / 'css' / 'components' / 'week-review.css'
+WEEK_REVIEW_JS = SIGNALTRACKERS_DIR / 'static' / 'js' / 'components' / 'week-review.js'
 DASHBOARD_CSS = SIGNALTRACKERS_DIR / 'static' / 'css' / 'dashboard.css'
 
 
@@ -43,13 +46,16 @@ def briefing_section(index_html):
 
 @pytest.fixture(scope='module')
 def loader_js(index_html):
+    # The formatters and renderer moved to week-review.js in US-490.4; the
+    # homepage keeps its own loader.
     start = index_html.index('Week in Review loader (US-490.3)')
-    return index_html[start:index_html.index('Dashboard data', start)]
+    return WEEK_REVIEW_JS.read_text() + index_html[start:index_html.index('Dashboard data', start)]
 
 
 @pytest.fixture(scope='module')
 def summary_css():
-    return SUMMARY_CSS.read_text()
+    # Homepage file first: the media-query tests index its first @media block.
+    return SUMMARY_CSS.read_text() + WEEK_REVIEW_CSS.read_text()
 
 
 # ─── Section copy ──────────────────────────────────────────────────────
@@ -159,16 +165,19 @@ class TestFreshness:
 
 class TestStructuredRenderer:
     def test_part_labels_sentence_case_h4(self, loader_js):
-        assert "makeEl('h4', 'briefing-part__label', label)" in loader_js
+        assert "makeEl(tag, 'briefing-part__label', label)" in loader_js
+        # Homepage default is <h4>; section pages pass partTag 'h3' (US-490.4)
+        assert "(opts && opts.partTag) || 'h4'" in loader_js
+        assert 'buildStructuredReview(data.structured)' in loader_js
         for label in ('What changed', 'Why it matters', 'What to watch next week'):
-            assert "makePart('" + label + "')" in loader_js
+            assert "makePart('" + label + "', partTag)" in loader_js
 
     def test_headline_is_paragraph(self, loader_js):
         assert "makeEl('p', 'briefing-headline', s.headline)" in loader_js
 
     def test_lists(self, loader_js):
         assert "makeEl('ul', 'briefing-changed')" in loader_js
-        assert "makeEl('ol', 'briefing-watch')" in loader_js
+        assert "makeEl('ol', inlineWatch ? 'briefing-watch briefing-watch--inline' : 'briefing-watch')" in loader_js
 
     def test_watch_chip_has_full_day_name(self, loader_js):
         assert "makeEl('span', 'briefing-watch__day')" in loader_js
@@ -185,7 +194,8 @@ class TestStructuredRenderer:
         assert "'a'" not in builder and "'button'" not in builder
 
     def test_fields_never_parsed_as_html(self, loader_js):
-        builder = loader_js[loader_js.index('function makeEl'):loader_js.index('function renderMarkdownBriefing')]
+        js = WEEK_REVIEW_JS.read_text()
+        builder = js[js.index('function makeEl'):js.index('function renderSectionMarkdown')]
         assert 'innerHTML' not in builder
         assert 'textContent' in builder
 
@@ -283,8 +293,8 @@ _CASES = [
 
 
 def _run_formatters(tz):
-    js = INDEX_HTML.read_text()
-    start = js.index('const BRIEFING_ERROR_COPY')
+    js = WEEK_REVIEW_JS.read_text()
+    start = js.index('const BRIEFING_STALE_MS')
     end = js.index('function makeEl(')
     script = js[start:end] + '\nconst cases = ' + json.dumps(dict(_CASES)) + ''';
 const out = {};
@@ -317,8 +327,8 @@ class TestDateFormatting:
 
 @pytest.mark.skipif(NODE is None, reason='node not installed')
 def test_stale_boundary():
-    js = INDEX_HTML.read_text()
-    script = js[js.index('const BRIEFING_ERROR_COPY'):js.index('function makeEl(')] + '''
+    js = WEEK_REVIEW_JS.read_text()
+    script = js[js.index('const BRIEFING_STALE_MS'):js.index('function makeEl(')] + '''
 const pub = Date.parse('2026-10-30T17:45:00-04:00');
 const at = (ms) => { Date.now = () => ms; return isBriefingStale({ published_at: '2026-10-30T17:45:00-04:00' }); };
 const DAY = 86400000, MIN = 60000;

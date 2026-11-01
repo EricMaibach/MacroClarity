@@ -94,18 +94,17 @@ class TestNewsDashboardRoute:
             "'articles'" in news_src
         ), "Route must extract articles from stored pipeline data"
 
-    def test_news_route_extracts_date_from_stored(self):
-        """Route extracts the record date for is_stale calculation."""
+    def test_news_route_uses_week_fields(self):
+        """Route derives the week label and staleness from the record's week fields (US-490.4)."""
         news_src = _get_function_source(DASHBOARD_SOURCE, 'news')
-        assert (
-            "'date'" in news_src
-        ), "Route must extract date from stored data to compute is_stale"
+        assert 'briefing_week.display_fields(stored)' in news_src
+        assert 'briefing_week.format_week_label(week)' in news_src
 
     def test_news_route_computes_is_stale(self):
-        """Route sets is_stale based on date comparison."""
+        """is_stale follows the 8-day rule, not "record date != today" (US-490.4)."""
         news_src = _get_function_source(DASHBOARD_SOURCE, 'news')
-        assert 'is_stale' in news_src, "Route must set is_stale"
-        assert 'today' in news_src.lower(), "is_stale must involve today's date"
+        assert 'is_stale = briefing_week.is_stale(week)' in news_src
+        assert 'today_str' not in news_src
 
     def test_news_route_graceful_when_no_stored_data(self):
         """Route handles None from get_stored_news() without crashing."""
@@ -114,19 +113,6 @@ class TestNewsDashboardRoute:
         assert (
             'if stored' in news_src or 'stored is None' in news_src or 'if not stored' in news_src
         ), "Route must handle None returned by get_stored_news()"
-
-    def test_news_route_stale_date_set_when_stale(self):
-        """stale_date is set to the stored record's date when is_stale is True."""
-        news_src = _get_function_source(DASHBOARD_SOURCE, 'news')
-        assert 'stale_date' in news_src, "Route must set stale_date"
-
-    def test_news_route_is_stale_false_for_today(self):
-        """is_stale is False when stored date equals today."""
-        news_src = _get_function_source(DASHBOARD_SOURCE, 'news')
-        # The logic compares record date to today — verify today comparison is present
-        assert (
-            'today_str' in news_src or 'today' in news_src
-        ), "Route must compare stored date to today's date"
 
     def test_news_route_runtime_returns_200(self):
         """news() route returns 200 when get_stored_news() returns None (empty state)."""
@@ -423,24 +409,10 @@ class TestGracefulFallback:
 class TestStaleDetection:
     """Tests for is_stale / stale_date logic in the news route."""
 
-    def test_is_stale_uses_date_comparison_not_datetime(self):
-        """is_stale is based on date-only comparison, not datetime."""
-        news_src = _get_function_source(DASHBOARD_SOURCE, 'news')
-        # Should use _date or date.today(), not datetime
-        assert (
-            '_date.today()' in news_src or 'date.today()' in news_src or
-            'today_str' in news_src
-        ), "is_stale must use date-based comparison"
-
-    def test_is_stale_false_when_today(self):
-        """is_stale is False when stored date matches today."""
-        news_src = _get_function_source(DASHBOARD_SOURCE, 'news')
-        assert 'today_str' in news_src or 'today' in news_src
-
-    def test_stale_date_only_set_when_stale(self):
-        """stale_date is set to stored date only when is_stale is True."""
-        news_src = _get_function_source(DASHBOARD_SOURCE, 'news')
-        assert 'stale_date' in news_src
+    def test_stale_uses_eight_day_rule(self):
+        """A Saturday-Thursday read of last Friday's review is not stale (US-490.4)."""
+        import briefing_week
+        assert briefing_week.STALE_AFTER == timedelta(days=8)
 
     def test_stale_logic_runtime_stale(self):
         """Runtime: is_stale=True when stored date is yesterday."""
@@ -500,7 +472,7 @@ class TestSecurityConstraints:
         assert 'eval(' not in news_src, "Do not eval article URLs"
 
     def test_article_urls_passed_as_is(self):
-        """Route passes articles directly from storage without URL modification."""
+        """Route passes articles from storage; only non-http(s) hrefs are dropped (news_display.safe_href)."""
         news_src = _get_function_source(DASHBOARD_SOURCE, 'news')
         # Should not do any URL manipulation beyond extracting domain for display
         assert 'sources' in news_src

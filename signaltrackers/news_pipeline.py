@@ -514,6 +514,20 @@ def summarize_week_news(week_start: date, through: date) -> bool:
     return True
 
 
+def has_published_review() -> bool:
+    """True if a news summary was ever stored, in any window.
+
+    Lets the news page tell "the first weekly review hasn't been published
+    yet" apart from "we have nothing recent enough to show".
+    """
+    try:
+        if any(r.get('summary') for r in _load_reviews()['reviews']):
+            return True
+        return any(v.get('summary') for v in _load_cache().values())
+    except Exception:
+        return False
+
+
 def get_stored_news(max_stale_days: int = 14) -> dict | None:
     """
     Return the news record to display and to feed into briefings.

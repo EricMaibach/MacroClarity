@@ -63,6 +63,7 @@
 
 .news-header__date {
     font-size: var(--text-sm);
+    font-weight: 500; /* week label, spec §1 */
     color: var(--neutral-500);
     margin: 0;
 }
@@ -149,6 +150,11 @@
     margin: 0;
 }
 
+/* The weekly summary renders one <p> per paragraph (US-490.4) */
+.news-summary-card__body p + p {
+    margin-top: var(--space-3);
+}
+
 .news-summary-card__footer {
     border-top: 1px solid var(--neutral-200);
     padding-top: var(--space-3);
@@ -174,6 +180,20 @@
     gap: var(--space-3);
 }
 
+/* Day headings (US-490.4): <h3> under the "Sources" <h2>, not sticky */
+.news-sources__day {
+    font-size: var(--text-xs);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--neutral-500);
+    margin: var(--space-5) 0 var(--space-2) 0;
+}
+
+.news-sources__label + .news-sources__day {
+    margin-top: 0;
+}
+
 /* ─── Source Card ────────────────────────────────────── */
 
 .news-source-card {
@@ -195,6 +215,13 @@
     border-color: var(--neutral-300);
     transform: translateY(-1px);
     text-decoration: none;
+}
+
+/* A stored URL that is not http(s) renders as plain text, not a link */
+.news-source-card--no-link:hover {
+    box-shadow: none;
+    border-color: var(--neutral-200);
+    transform: none;
 }
 
 .news-source-card__content {
