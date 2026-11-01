@@ -33,7 +33,7 @@
 
                     <!-- Content -->
                     <tr>
-                        <td style="padding: 30px 30px 40px 30px; color: #333333; font-size: 16px; line-height: 1.6;">
+                        <td style="{% block content_cell_style %}padding: 30px 30px 40px 30px;{% endblock %} color: #333333; font-size: 16px; line-height: 1.6;">
                             {% block content %}
                             <!-- Email content goes here -->
                             {% endblock %}

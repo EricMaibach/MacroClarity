@@ -6,9 +6,11 @@
 <div style="display: none; max-height: 0; overflow: hidden; mso-hide: all; font-size: 1px; line-height: 1px; color: #f4f4f4; opacity: 0;">{{ preheader }}</div>
 {% endblock %}
 
+{% block content_cell_style %}padding: 0;{% endblock %}
+
 {% block content %}
-<!-- Remove the default padding from base template for custom layout -->
-</td></tr>
+<!-- Full-bleed rows: the content cell has no padding, so the hero sits flush under the header -->
+<table border="0" cellpadding="0" cellspacing="0" width="100%">
 
 <!-- 1. Hero -->
 <tr>
@@ -192,6 +194,5 @@
     </td>
 </tr>
 
-<!-- Restore base template structure -->
-<tr><td style="padding: 30px 30px 40px 30px; color: #333333; font-size: 16px; line-height: 1.6;">
+</table>
 {% endblock %}

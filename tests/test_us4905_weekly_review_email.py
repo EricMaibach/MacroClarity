@@ -456,6 +456,25 @@ class TestEmailContent:
         assert positions == sorted(positions)
         assert 'Wed: FOMC decision - first meeting since the soft CPI print' in text
 
+    def test_no_blank_padding_around_full_bleed_rows(self, app_ctx):
+        """Design review: the hero sits flush under the navy header, and the CTA
+        is followed straight by the footer (no empty padded content rows)."""
+        _, html, _ = _render(bes.build_review_content(_record()), moves=MOVES)
+        header_end = html.index('Macro Finance Data &amp; Analysis')
+        hero = html.index('<!-- 1. Hero -->')
+        between = html[header_end:hero]
+        assert 'padding: 0;' in between
+        assert '30px 30px 40px 30px' not in between
+        cta = html.index('Read the Full Review')
+        footer = html.index('This email was sent by')
+        assert '30px 30px 40px 30px' not in html[cta:footer]
+        assert '30px 30px 40px 30px' not in html
+
+    def test_other_emails_keep_default_content_padding(self, app_ctx):
+        from flask import render_template
+        html = render_template('email/test_email.html', unsubscribe_url='#', user=None, username='x')
+        assert 'padding: 30px 30px 40px 30px;' in html
+
     def test_alerts_and_portfolio_blocks(self, app_ctx):
         content = bes.build_review_content(_record())
         _, html, text = _render(content, portfolio='Your mix is balanced.')
