@@ -329,6 +329,91 @@ def week_in_numbers(scope: str, week_start: date, through: date,
     )
 
 
+# How many earlier weeks set the "typical weekly move" a week is ranked against.
+_MOVES_HISTORY_WEEKS = 104
+
+
+def _change_value(kind: str, start: float, end: float) -> float | None:
+    if kind == 'bp':
+        return (end - start) * 100
+    if kind == 'pts':
+        return end - start
+    return (end / start - 1) * 100 if start else None
+
+
+def _typical_weekly_move(df, kind: str, week_start: date) -> float | None:
+    """Standard deviation of the series' Friday-to-Friday changes over the
+    weeks before `week_start`, in the same unit as `_change_value`."""
+    s = df.set_index(pd.to_datetime(df['date']))['value']
+    weekly = s[s.index < pd.Timestamp(week_start)].resample('W-FRI').last().dropna()
+    weekly = weekly.tail(_MOVES_HISTORY_WEEKS + 1)
+    if len(weekly) < 10:
+        return None
+    if kind == 'bp':
+        changes = weekly.diff() * 100
+    elif kind == 'pts':
+        changes = weekly.diff()
+    else:
+        changes = weekly.pct_change() * 100
+    std = changes.dropna().std()
+    return float(std) if pd.notna(std) and std > 0 else None
+
+
+def _format_level(kind: str, value: float) -> str:
+    if kind == 'bp':
+        return f'{value:.2f}%'
+    if kind == 'pts':
+        return f'{value:,.1f}'
+    return f'{value:,.2f}'
+
+
+def _format_move(kind: str, change: float) -> str:
+    if kind == 'bp':
+        return f'{change:+.0f} bp'
+    if kind == 'pts':
+        return f'{change:+.1f} pts'
+    return f'{change:+.1f}%'
+
+
+def biggest_moves(week_start: date, through: date, limit: int = 5,
+                  data_dir: Path | None = None) -> list[dict]:
+    """The week's biggest moves for the weekly email (US-490.5).
+
+    Uses the same series and the same weekly change as WEEK IN NUMBERS
+    (`weekly_change`: previous Friday's close to the last close this week), so
+    the email's table agrees with the review above it. Percent, basis-point and
+    index-point moves are not comparable directly, so each series is ranked by
+    the size of this week's change relative to its typical weekly move over
+    the previous two years. Series with no observation inside the week are
+    skipped.
+    """
+    data_dir = data_dir or DATA_DIR
+    moves = []
+    for stem, label, kind in WEEKLY_METRICS['general']:
+        df = _load_series(stem, data_dir)
+        ch = weekly_change(df, week_start, through)
+        if ch is None:
+            continue
+        change = _change_value(kind, ch['start'], ch['end'])
+        typical = _typical_weekly_move(df, kind, week_start)
+        if change is None or typical is None:
+            continue
+        history = df[df['date'] <= ch['end_date']]['value']
+        percentile = round(float((history <= ch['end']).mean() * 100))
+        arrow = '↑' if change > 0 else '↓' if change < 0 else '→'
+        moves.append({
+            'metric': stem,
+            'name': label,
+            'value': _format_level(kind, ch['end']),
+            'percentile': percentile,
+            'change': _format_move(kind, change),
+            'change_arrow': arrow,
+            'score': abs(change) / typical,
+        })
+    moves.sort(key=lambda m: m['score'], reverse=True)
+    return moves[:limit]
+
+
 def macro_readings(week_start: date, through: date, data_dir: Path | None = None) -> str:
     """Latest readings of the lower-frequency macro series.
 

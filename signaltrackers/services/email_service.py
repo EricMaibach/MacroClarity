@@ -106,32 +106,3 @@ def send_alert_email(to, alert_type, alert_data):
     except Exception as e:
         logger.error(f"Failed to send alert email: {str(e)}")
         return False
-
-
-def send_daily_briefing(to, briefing_data):
-    """
-    Send the daily market briefing email
-
-    Args:
-        to: Recipient email address
-        briefing_data: Dictionary containing briefing content sections
-            - market_briefing: AI narrative summary
-            - conditions: Market conditions data
-            - movers: Top market movers
-            - portfolio: Portfolio context (optional)
-            - alerts: Triggered alerts from past 24h
-
-    Returns:
-        bool: True if briefing sent successfully, False otherwise
-    """
-    try:
-        return send_email(
-            to=to,
-            subject='Your Daily Market Briefing - SignalTrackers',
-            template_html='email/daily_briefing.html',
-            template_txt='email/daily_briefing.txt',
-            **briefing_data
-        )
-    except Exception as e:
-        logger.error(f"Failed to send daily briefing: {str(e)}")
-        return False

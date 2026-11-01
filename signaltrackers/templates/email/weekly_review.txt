@@ -1,0 +1,81 @@
+{% extends "email/base_email.txt" %}
+
+{% block content -%}
+================================================================================
+YOUR WEEK IN REVIEW
+{% if week_label %}{{ week_label }}
+{% endif -%}
+================================================================================
+{%- if headline %}
+
+THIS WEEK IN ONE LINE
+--------------------------------------------------------------------------------
+{{ headline }}
+{%- endif %}
+{%- if changed or why_paragraphs %}
+
+THE WEEK IN REVIEW
+--------------------------------------------------------------------------------
+{%- if changed %}
+WHAT CHANGED
+{%- for item in changed %}
+- {{ item }}
+{%- endfor %}
+{%- endif %}
+{%- if why_paragraphs %}
+
+WHY IT MATTERS
+{%- for para in why_paragraphs %}
+{{ para }}
+{% endfor %}
+{%- endif %}
+{%- elif fallback_text %}
+
+THE WEEK IN REVIEW
+--------------------------------------------------------------------------------
+{{ fallback_text }}
+{%- endif %}
+{%- if market_conditions %}
+
+MARKET CONDITIONS AT A GLANCE
+--------------------------------------------------------------------------------
+{%- for condition in market_conditions %}
+{{ condition.icon }} {{ condition.name }}: {{ condition.status }}
+{%- endfor %}
+{%- endif %}
+{%- if top_movers %}
+
+BIGGEST MOVES THIS WEEK
+--------------------------------------------------------------------------------
+{%- for mover in top_movers %}
+{{ mover.name }}: {{ mover.value }} ({{ mover.percentile }}%ile), week {{ mover.change_arrow }} {{ mover.change }}
+{%- endfor %}
+{%- endif %}
+{%- if watch %}
+
+WHAT TO WATCH NEXT WEEK
+--------------------------------------------------------------------------------
+{%- for item in watch %}
+{{ item.day }}: {{ item.event }}{% if item.reason %} - {{ item.reason }}{% endif %}
+{%- endfor %}
+{%- endif %}
+{%- if include_portfolio and portfolio_analysis %}
+
+YOUR PORTFOLIO CONTEXT
+--------------------------------------------------------------------------------
+{{ portfolio_analysis }}
+{%- endif %}
+{%- if triggered_alerts %}
+
+ALERTS TRIGGERED THIS WEEK
+--------------------------------------------------------------------------------
+{%- for alert in triggered_alerts %}
+! {{ alert.title }}
+{%- if alert.message %}
+  {{ alert.message }}
+{%- endif %}
+{%- endfor %}
+{%- endif %}
+
+Read the full review: {{ dashboard_url }}
+{% endblock %}

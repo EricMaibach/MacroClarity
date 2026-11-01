@@ -26,7 +26,7 @@ UNSUBSCRIBE_ENDPOINT = 'unsubscribe'
 
 # email_type -> AlertPreference flag it turns off, and the label shown to users
 UNSUBSCRIBE_TYPES = {
-    'briefing': {'preference': 'daily_briefing_enabled', 'label': 'daily briefing'},
+    'briefing': {'preference': 'daily_briefing_enabled', 'label': 'weekly review'},
     'alerts': {'preference': 'alerts_enabled', 'label': 'alert notification'},
 }
 

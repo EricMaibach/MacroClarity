@@ -80,14 +80,15 @@ def _path(url):
 
 
 def _briefing_send(user):
-    """Run the real briefing sender and return (context, headers) it sent."""
+    """Run the real weekly review sender and return (sent, send_mock)."""
+    content = briefing_email_service.build_review_content(
+        {'date': '2026-10-30', 'summary': 'A quiet week.', 'week_start': '2026-10-26',
+         'week_end': '2026-10-30', 'run_type': 'scheduled'})
     with patch.object(briefing_email_service, 'send_email', return_value=True) as send, \
-         patch.object(briefing_email_service, 'get_market_briefing_content', return_value=None), \
          patch.object(briefing_email_service, 'get_market_conditions_summary', return_value=None), \
-         patch.object(briefing_email_service, 'get_top_movers', return_value=[]), \
          patch.object(briefing_email_service, 'get_user_triggered_alerts', return_value=[]), \
          patch.object(briefing_email_service, 'get_portfolio_analysis_snippet', return_value=None):
-        sent = briefing_email_service.send_daily_briefing_to_user(user)
+        sent = briefing_email_service.send_weekly_review_to_user(user, content, moves=[])
     return sent, send
 
 
@@ -122,7 +123,7 @@ class TestRoundTrip:
         resp = client.post(_path(url))
         assert resp.status_code == 200
         assert b"You've Been Unsubscribed" in resp.data
-        assert b'daily briefing' in resp.data
+        assert b'weekly review' in resp.data
         assert _prefs(user.id).daily_briefing_enabled is False
         assert _prefs(user.id).alerts_enabled is True
 

@@ -48,6 +48,7 @@ from portfolio import (
 from config import get_config
 from extensions import init_extensions, db, limiter, csrf
 import briefing_week
+import weekly_email
 from email_links import UNSUBSCRIBE_TYPES, load_unsubscribe_token
 from models import User
 from scheduler import init_scheduler as init_apscheduler, shutdown_scheduler
@@ -2531,7 +2532,15 @@ def settings_alerts():
         'Australia/Sydney',
     ]
 
-    return render_template('settings_alerts.html', prefs=prefs, timezones=timezones)
+    # A stored value outside the list (set before validation existed) still shows.
+    if prefs.briefing_timezone not in timezones:
+        timezones.insert(0, prefs.briefing_timezone)
+
+    next_email = weekly_email.format_short_date(weekly_email.next_email_date(
+        prefs.briefing_timezone, prefs.last_briefing_sent_date))
+
+    return render_template('settings_alerts.html', prefs=prefs, timezones=timezones,
+                           next_email=next_email)
 
 
 @app.route('/settings/alerts/save', methods=['POST'])
@@ -2544,15 +2553,17 @@ def save_alert_settings():
         if not prefs:
             prefs = current_user.create_default_alert_preferences()
 
-        # Daily briefing settings
+        # Weekly review email (US-490.5). Frequency and time are gone: the
+        # email is weekly, around 08:00 Saturday in the user's timezone. The
+        # briefing_frequency / briefing_time columns are kept but ignored, so
+        # a stale form that still posts them is harmless.
         prefs.daily_briefing_enabled = request.form.get('daily_briefing_enabled') == 'on'
-        prefs.briefing_frequency = request.form.get('briefing_frequency', 'daily')
 
-        # Parse time
-        time_str = request.form.get('briefing_time', '07:00')
-        prefs.briefing_time = datetime.strptime(time_str, '%H:%M').time()
-
-        prefs.briefing_timezone = request.form.get('briefing_timezone', 'America/New_York')
+        timezone_name = request.form.get('briefing_timezone')
+        if weekly_email.is_valid_timezone(timezone_name):
+            prefs.briefing_timezone = timezone_name
+        elif timezone_name is not None:
+            prefs.briefing_timezone = weekly_email.DEFAULT_TIMEZONE
         prefs.include_portfolio_analysis = request.form.get('include_portfolio_analysis') == 'on'
 
         # Alert settings
@@ -6415,11 +6426,20 @@ def trigger_alert_check():
 @app.route('/admin/trigger-daily-briefing')
 @admin_required
 def trigger_daily_briefing():
-    """Manually trigger daily briefing (admin only)"""
-    from jobs.email_jobs import send_daily_briefings
-    send_daily_briefings()
+    """Send the weekly review email now (admin only).
 
-    return jsonify({'status': 'Daily briefing triggered successfully'})
+    The URL is kept for existing bookmarks. This is a force-send: it ignores
+    the Saturday window and the weekly dedup, sends the latest weekly review to
+    every opted-in user, and still never emails anyone who has opted out.
+    """
+    from jobs.email_jobs import send_weekly_reviews
+    result = send_weekly_reviews(force=True)
+
+    if result['review_week_end'] is None and result['sent'] == 0 and result['waiting']:
+        status = 'Weekly review email not sent: no weekly review is available yet'
+    else:
+        status = f"Weekly review email sent to {result['sent']} user(s)"
+    return jsonify({'status': status, **result})
 
 
 # ---------------------------------------------------------------------------

@@ -769,7 +769,11 @@ class TestMigration:
         from alembic.script import ScriptDirectory
         cfg = Config()
         cfg.set_main_option('script_location', str(SIGNALTRACKERS_DIR / 'migrations'))
-        assert ScriptDirectory.from_config(cfg).get_heads() == ['j5c6d7e8f9a0']
+        # One head; US-490.5 added k6d7e8f9a0b1 on top of this story's revision.
+        heads = ScriptDirectory.from_config(cfg).get_heads()
+        assert len(heads) == 1
+        assert ScriptDirectory.from_config(cfg).get_revision(heads[0]) is not None
+        assert 'j5c6d7e8f9a0' in {r.revision for r in ScriptDirectory.from_config(cfg).walk_revisions()}
 
     def test_upgrade_makes_user_id_nullable_and_keeps_rows(self):
         from alembic.migration import MigrationContext
