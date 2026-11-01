@@ -6,6 +6,7 @@
     <title>{% block title %}MacroClarity{% endblock %}</title>
 </head>
 <body style="margin: 0; padding: 0; font-family: Arial, Helvetica, sans-serif; background-color: #f4f4f4;">
+    {% block preheader %}{% endblock %}
     <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f4f4f4;">
         <tr>
             <td style="padding: 20px 0;">
@@ -32,7 +33,7 @@
 
                     <!-- Content -->
                     <tr>
-                        <td style="padding: 30px 30px 40px 30px; color: #333333; font-size: 16px; line-height: 1.6;">
+                        <td style="{% block content_cell_style %}padding: 30px 30px 40px 30px;{% endblock %} color: #333333; font-size: 16px; line-height: 1.6;">
                             {% block content %}
                             <!-- Email content goes here -->
                             {% endblock %}

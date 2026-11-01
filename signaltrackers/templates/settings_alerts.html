@@ -18,50 +18,36 @@
             <form id="alert-settings-form" method="POST" action="{{ url_for('save_alert_settings') }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
-                <!-- Daily Briefing Section -->
+                <!-- Weekly Review Email Section (US-490.5) -->
                 <div class="card mb-4">
                     <div class="card-header bg-primary text-white">
-                        <h5 class="mb-0"><i class="bi bi-envelope"></i> Daily Briefing Email</h5>
+                        <h5 class="mb-0"><i class="bi bi-envelope"></i> Weekly Review Email</h5>
                     </div>
                     <div class="card-body">
                         <!-- Enable/Disable -->
                         <div class="mb-3">
                             <div class="form-check form-switch">
                                 <input class="form-check-input" type="checkbox" id="daily_briefing_enabled"
-                                       name="daily_briefing_enabled" {{ 'checked' if prefs.daily_briefing_enabled }}>
+                                       name="daily_briefing_enabled" aria-describedby="weekly-review-help"
+                                       {{ 'checked' if prefs.daily_briefing_enabled }}>
                                 <label class="form-check-label" for="daily_briefing_enabled">
-                                    <strong>Enable Daily Briefing Email</strong>
+                                    <strong>Email me the weekly review</strong>
                                 </label>
                             </div>
-                            <small class="text-muted">Receive a comprehensive market summary via email</small>
+                            <small class="text-muted" id="weekly-review-help">Arrives Saturday morning: the week's biggest changes, why they matter and what to watch next week.</small>
                         </div>
 
                         <div id="briefing-options" style="{{ 'display: none;' if not prefs.daily_briefing_enabled }}">
-                            <!-- Frequency -->
-                            <div class="mb-3">
-                                <label for="briefing_frequency" class="form-label">Frequency</label>
-                                <select class="form-select" id="briefing_frequency" name="briefing_frequency">
-                                    <option value="daily" {{ 'selected' if prefs.briefing_frequency == 'daily' }}>Daily</option>
-                                    <option value="weekly" {{ 'selected' if prefs.briefing_frequency == 'weekly' }}>Weekly (Monday)</option>
-                                </select>
-                            </div>
-
-                            <!-- Send Time -->
-                            <div class="mb-3">
-                                <label for="briefing_time" class="form-label">Preferred Time</label>
-                                <input type="time" class="form-control" id="briefing_time" name="briefing_time"
-                                       value="{{ prefs.briefing_time.strftime('%H:%M') }}">
-                                <small class="text-muted">Email will be sent at this time in your timezone</small>
-                            </div>
-
                             <!-- Timezone -->
                             <div class="mb-3">
                                 <label for="briefing_timezone" class="form-label">Timezone</label>
-                                <select class="form-select" id="briefing_timezone" name="briefing_timezone">
+                                <select class="form-select" id="briefing_timezone" name="briefing_timezone"
+                                        aria-describedby="briefing-timezone-help">
                                     {% for tz in timezones %}
                                     <option value="{{ tz }}" {{ 'selected' if prefs.briefing_timezone == tz }}>{{ tz }}</option>
                                     {% endfor %}
                                 </select>
+                                <small class="text-muted" id="briefing-timezone-help">Delivered around 8:00 AM Saturday, your time</small>
                             </div>
 
                             <!-- Portfolio Analysis -->
@@ -75,6 +61,10 @@
                                 </div>
                                 <small class="text-muted">Adds AI-generated context for your portfolio allocation</small>
                             </div>
+
+                            {% if prefs.daily_briefing_enabled %}
+                            <p class="small text-secondary mb-0" id="next-email">Next email: {{ next_email }}</p>
+                            {% endif %}
                         </div>
                     </div>
                 </div>

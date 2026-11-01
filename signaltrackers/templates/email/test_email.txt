@@ -15,7 +15,7 @@ Email Service Status:
 
 Your email infrastructure is now ready for:
   - Alert notifications
-  - Daily market briefings
+  - A weekly market review every Saturday morning
   - Portfolio updates
 
 You can safely proceed with implementing email-based features.

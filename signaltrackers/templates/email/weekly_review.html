@@ -1,48 +1,75 @@
 {% extends "email/base_email.html" %}
 
-{% block title %}Your Daily Market Briefing - MacroClarity{% endblock %}
+{% block title %}{{ email_subject }} - MacroClarity{% endblock %}
+
+{% block preheader %}
+<div style="display: none; max-height: 0; overflow: hidden; mso-hide: all; font-size: 1px; line-height: 1px; color: #f4f4f4; opacity: 0;">{{ preheader }}</div>
+{% endblock %}
+
+{% block content_cell_style %}padding: 0;{% endblock %}
 
 {% block content %}
-<!-- Remove the default padding from base template for custom layout -->
-</td></tr>
+<!-- Full-bleed rows: the content cell has no padding, so the hero sits flush under the header -->
+<table border="0" cellpadding="0" cellspacing="0" width="100%">
 
-<!-- Hero Header -->
+<!-- 1. Hero -->
 <tr>
-    <td style="padding: 30px 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); text-align: center;">
-        <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 600;">
-            📊 Your Daily Market Briefing
+    <td style="padding: 30px 20px; background-color: #09264c; text-align: center;">
+        <h1 style="color: #ffffff; margin: 0; font-size: 28px; font-weight: 600;">
+            Your Week in Review
         </h1>
-        <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0; font-size: 14px;">
-            {{ briefing_date }}
+        {% if week_label %}
+        <p style="color: #ffffff; margin: 10px 0 0 0; font-size: 14px;">
+            {{ week_label }}
         </p>
+        {% endif %}
     </td>
 </tr>
 
-<!-- AI Market Briefing Section (conditional - only if AI configured) -->
-{% if market_briefing_html %}
-<!-- One-liner Synthesis (Preheader) -->
+<!-- 2. Headline band -->
+{% if headline %}
 <tr>
-    <td style="padding: 20px; background-color: #f8f9fa; border-left: 4px solid #667eea;">
-        <p style="margin: 0; font-size: 16px; font-style: italic; color: #495057;">
-            <strong>Today's Snapshot:</strong> {{ market_synthesis }}
+    <td style="padding: 20px; background-color: #f8f9fa; border-left: 4px solid #1E40AF;">
+        <p style="margin: 0; font-size: 16px; color: #495057;">
+            <strong>This week in one line:</strong> {{ headline }}
         </p>
     </td>
 </tr>
+{% endif %}
 
-<!-- Section 1: Today's Market Briefing -->
+<!-- 3. Review parts (or markdown fallback) -->
+{% if changed or why_paragraphs or fallback_html %}
 <tr>
     <td style="padding: 30px 20px;">
         <h2 style="color: #212529; font-size: 22px; margin: 0 0 15px 0; border-bottom: 2px solid #dee2e6; padding-bottom: 10px;">
-            📈 Today's Market Briefing
+            The Week in Review
         </h2>
         <div style="color: #495057; font-size: 15px; line-height: 1.6;">
-            {{ market_briefing_html | safe }}
+        {% if changed or why_paragraphs %}
+            {% if changed %}
+            <h3 style="margin: 0 0 8px 0; font-size: 12px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #697386;">What changed</h3>
+            <ul style="margin: 0 0 20px 0; padding-left: 20px;">
+                {% for item in changed %}
+                <li style="margin-bottom: 8px;">{{ item }}</li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+            {% if why_paragraphs %}
+            <h3 style="margin: 0 0 8px 0; font-size: 12px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #697386;">Why it matters</h3>
+            {% for para in why_paragraphs %}
+            <p style="margin: 0 0 15px 0;">{{ para }}</p>
+            {% endfor %}
+            {% endif %}
+        {% else %}
+            {{ fallback_html }}
+        {% endif %}
         </div>
     </td>
 </tr>
 {% endif %}
 
-<!-- Section 2: Market Conditions at a Glance -->
+<!-- 4. Conditions -->
+{% if market_conditions %}
 <tr>
     <td style="padding: 20px; background-color: #f8f9fa;">
         <h2 style="color: #212529; font-size: 22px; margin: 0 0 15px 0;">
@@ -58,7 +85,7 @@
                         {{ condition.status }}
                     </span>
                 </td>
-                {% if loop.index is divisibleby 3 %}
+                {% if loop.index is divisibleby 3 and not loop.last %}
                 </tr><tr>
                 {% endif %}
                 {% endfor %}
@@ -66,12 +93,14 @@
         </table>
     </td>
 </tr>
+{% endif %}
 
-<!-- Section 3: What's Moving Today -->
+<!-- 5. Weekly movers -->
+{% if top_movers %}
 <tr>
     <td style="padding: 30px 20px;">
         <h2 style="color: #212529; font-size: 22px; margin: 0 0 15px 0;">
-            ⚡ What's Moving Today
+            ⚡ Biggest Moves This Week
         </h2>
         <table width="100%" cellpadding="8" cellspacing="0" style="border-collapse: collapse;">
             <thead>
@@ -79,7 +108,7 @@
                     <th style="text-align: left; padding: 10px; font-size: 12px; color: #6c757d;">Metric</th>
                     <th style="text-align: right; padding: 10px; font-size: 12px; color: #6c757d;">Value</th>
                     <th style="text-align: right; padding: 10px; font-size: 12px; color: #6c757d;">Percentile</th>
-                    <th style="text-align: right; padding: 10px; font-size: 12px; color: #6c757d;">Change</th>
+                    <th style="text-align: right; padding: 10px; font-size: 12px; color: #6c757d;">Week</th>
                 </tr>
             </thead>
             <tbody>
@@ -88,7 +117,7 @@
                     <td style="padding: 10px; font-size: 14px; color: #212529;">{{ mover.name }}</td>
                     <td style="padding: 10px; text-align: right; font-family: 'Courier New', monospace; font-size: 14px;">{{ mover.value }}</td>
                     <td style="padding: 10px; text-align: right; font-size: 14px;">{{ mover.percentile }}%</td>
-                    <td style="padding: 10px; text-align: right; font-size: 14px; color: {{ mover.change_color }};">
+                    <td style="padding: 10px; text-align: right; font-size: 14px; color: #334155; white-space: nowrap;">
                         {{ mover.change_arrow }} {{ mover.change }}
                     </td>
                 </tr>
@@ -97,8 +126,33 @@
         </table>
     </td>
 </tr>
+{% endif %}
 
-<!-- Section 4: Portfolio Context (conditional) -->
+<!-- 6. Watch table -->
+{% if watch %}
+<tr>
+    <td style="padding: 0 20px 30px 20px;">
+        <h2 style="color: #212529; font-size: 22px; margin: 0 0 15px 0;">
+            What to Watch Next Week
+        </h2>
+        <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse: collapse;">
+            {% for item in watch %}
+            <tr style="border-bottom: 1px solid #dee2e6;">
+                <td width="60" valign="top" style="width: 60px; padding: 10px 8px 10px 0; font-size: 13px; font-weight: 700; color: #212529;">
+                    {{ item.day }}
+                </td>
+                <td valign="top" style="padding: 10px 0; font-size: 14px; color: #212529; line-height: 1.5;">
+                    <strong>{{ item.event }}</strong>{% if item.reason %}<br>
+                    <span style="color: #495057;">{{ item.reason }}</span>{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </table>
+    </td>
+</tr>
+{% endif %}
+
+<!-- 7. Portfolio (conditional) -->
 {% if include_portfolio and portfolio_analysis %}
 <tr>
     <td style="padding: 20px; background-color: #fff3cd; border-left: 4px solid #ffc107;">
@@ -112,12 +166,12 @@
 </tr>
 {% endif %}
 
-<!-- Section 5: Triggered Alerts (conditional) -->
-{% if triggered_alerts and triggered_alerts|length > 0 %}
+<!-- 8. Alerts, past 7 days (conditional) -->
+{% if triggered_alerts %}
 <tr>
     <td style="padding: 30px 20px; background-color: #f8d7da; border-left: 4px solid #dc3545;">
         <h2 style="color: #721c24; font-size: 22px; margin: 0 0 15px 0;">
-            🚨 Alerts Triggered (Last 24h)
+            🚨 Alerts Triggered This Week
         </h2>
         {% for alert in triggered_alerts %}
         <div style="margin-bottom: 10px; padding: 10px; background-color: white; border-radius: 4px;">
@@ -131,15 +185,14 @@
 </tr>
 {% endif %}
 
-<!-- CTA Button -->
+<!-- 9. CTA Button -->
 <tr>
     <td style="padding: 30px 20px; text-align: center;">
-        <a href="{{ dashboard_url }}" style="display: inline-block; padding: 15px 40px; background-color: #667eea; color: white; text-decoration: none; border-radius: 6px; font-size: 16px; font-weight: 600;">
-            View Full Dashboard →
+        <a href="{{ dashboard_url }}" style="display: inline-block; padding: 15px 40px; background-color: #1E40AF; color: #ffffff; text-decoration: none; border-radius: 6px; font-size: 16px; font-weight: 600;">
+            Read the Full Review →
         </a>
     </td>
 </tr>
 
-<!-- Restore base template structure -->
-<tr><td style="padding: 30px 30px 40px 30px; color: #333333; font-size: 16px; line-height: 1.6;">
+</table>
 {% endblock %}

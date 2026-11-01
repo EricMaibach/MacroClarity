@@ -51,7 +51,7 @@ def register_jobs(app):
     """Register all scheduled jobs"""
     # Import job wrapper that will handle app context
     from jobs.alert_jobs import check_alert_thresholds_wrapper
-    from jobs.email_jobs import send_daily_briefings_wrapper
+    from jobs.email_jobs import send_weekly_reviews_wrapper
     from jobs.sector_tone_jobs import run_sector_tone_pipeline_wrapper
 
     # Alert checking - every 15 minutes
@@ -65,17 +65,19 @@ def register_jobs(app):
     )
     logger.info("Registered job: check_alerts (every 15 minutes)")
 
-    # Daily briefings - runs every 15 minutes, sends to users when their local time matches preference
-    # Job checks each user's timezone and preferred time, only sends when hour matches
+    # Weekly review email (US-490.5) - runs every 15 minutes and emails users
+    # who are due: Saturday 08:00+ in their timezone, once this week's review exists.
     scheduler.add_job(
-        func=send_daily_briefings_wrapper,
+        func=send_weekly_reviews_wrapper,
         trigger='interval',
-        minutes=15,  # Run every 15 minutes
+        minutes=15,
+        # Id kept from the old daily email: the job store is persistent, and
+        # replace_existing swaps the function in place under the same id.
         id='daily_briefings',
-        name='Send daily briefing emails',
+        name='Send weekly review emails',
         replace_existing=True
     )
-    logger.info("Registered job: daily_briefings (every 15 minutes)")
+    logger.info("Registered job: daily_briefings -> weekly review email (every 15 minutes)")
 
     # Quarterly sector management tone pipeline
     # Runs at 02:00 UTC on the 1st of Jan, Apr, Jul, Oct (start of each calendar quarter)

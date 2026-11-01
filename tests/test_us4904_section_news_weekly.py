@@ -506,8 +506,6 @@ class TestNewsTemplate:
 # ─── Copy sweep ────────────────────────────────────────────────────────
 
 _SWEEP = re.compile(r"daily briefing|today's briefing|daily .* briefing", re.IGNORECASE)
-# Email templates and the settings card are US-490.5.
-_SWEEP_LATER = ('email/', 'settings_alerts.html')
 
 
 def _visible(text):
@@ -517,10 +515,9 @@ def _visible(text):
 
 def test_template_sweep_has_no_daily_briefing_copy():
     hits = []
-    for path in TEMPLATES.rglob('*.html'):
+    # US-490.5 finished the sweep: email templates (.html + .txt) and settings.
+    for path in sorted([*TEMPLATES.rglob('*.html'), *TEMPLATES.rglob('*.txt')]):
         rel = path.relative_to(TEMPLATES).as_posix()
-        if rel.startswith(_SWEEP_LATER[0]) or rel == _SWEEP_LATER[1]:
-            continue
         for n, line in enumerate(_visible(path.read_text()).splitlines(), 1):
             if _SWEEP.search(line):
                 hits.append(f'{rel}:{n}: {line.strip()}')
