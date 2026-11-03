@@ -169,6 +169,11 @@ For any new bug issues without priority set:
   ```bash
   gh issue edit <number> --add-label needs-test-plan
   ```
+- **Every triaged bug must leave triage with a state label.** `scripts/run-qa.sh` wakes QA for any open bug that has none of: `needs-test-plan`, `ready-for-implementation`, `needs-design-review`, `needs-design-changes`, `needs-qa-testing`, `needs-fixes`, `ready-for-pr`, `blocked`, `needs-clarification`, `needs-human-decision`, `deferred`, `triaged` (bug #508). If a bug should **not** enter the pipeline (for example, it is fixed on another story's branch), park it so QA stops waking every 5 minutes:
+  ```bash
+  gh issue edit <number> --add-label triaged
+  ```
+  If you add a new parking label, add it to `QA_TRIAGED_BUG_LABELS` in `scripts/run-qa.sh` too.
 
 ---
 
