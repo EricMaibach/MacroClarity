@@ -3720,6 +3720,10 @@ def api_chatbot():
                     # budget_tokens returns 400. Left at the default
                     # display ("omitted") — the chat UI does not show reasoning.
                     thinking={"type": "adaptive"},
+                    # Explicit, not the model default: Sonnet 5.5 defaults to
+                    # 'high'. Text between tool calls comes back as thinking
+                    # blocks on 5.5, so only 'text' blocks are read below.
+                    output_config={"effort": app.config['ANTHROPIC_CHATBOT_EFFORT']},
                 )
 
                 # Log cache usage for cost monitoring

@@ -42,8 +42,9 @@ services:
       - ANTHROPIC_EFFORT=${ANTHROPIC_EFFORT:-medium}
 
       # Anthropic models (briefings/news vs. chatbot — see .env.example for cost notes)
-      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-fable-5-1}
-      - ANTHROPIC_CHATBOT_MODEL=${ANTHROPIC_CHATBOT_MODEL:-claude-sonnet-5}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-opus-5-5}
+      - ANTHROPIC_CHATBOT_MODEL=${ANTHROPIC_CHATBOT_MODEL:-claude-sonnet-5-5}
+      - ANTHROPIC_CHATBOT_EFFORT=${ANTHROPIC_CHATBOT_EFFORT:-low}
 
       # Email Configuration (for alerts and briefings)
       - MAIL_SERVER=${MAIL_SERVER:-smtp-relay.brevo.com}
