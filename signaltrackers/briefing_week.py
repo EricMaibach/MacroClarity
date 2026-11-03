@@ -12,8 +12,9 @@ covers the Mon-Fri trading week. This module owns:
 - the week label and stale rule for server-rendered pages
   (`format_week_label`, `is_stale`);
 - the run context that tells a generator whether it is running inside the
-  scheduled weekly job or a manual regenerate (`scheduled_run`), and the
-  metering hook that records scheduled AI calls (`meter_ai_call`).
+  scheduled weekly job or a manual regenerate (`scheduled_run`), the user
+  scope a regenerate route opens (`user_metering`), and the metering hook
+  that records both kinds of AI call (`meter_ai_call`).
 
 Like `anthropic_request.py` and `email_links.py`, this lives at the top level
 (not under `services/`) and imports only stdlib + pytz, so `ai_summary.py` and
@@ -44,6 +45,8 @@ RUN_LEGACY = 'legacy'
 
 # Usage-metering interaction type for AI calls made by the weekly job.
 SCHEDULED_INTERACTION_TYPE = 'scheduled_briefing'
+# Usage-metering interaction type for a user's manual briefing regenerate.
+REGENERATE_INTERACTION_TYPE = 'briefing_regenerate'
 
 
 # ---------------------------------------------------------------------------
@@ -281,22 +284,48 @@ def is_stale(fields: dict | None, now: datetime | None = None) -> bool:
 # Metering
 # ---------------------------------------------------------------------------
 
-def meter_ai_call(usage: dict | None, model: str | None) -> None:
-    """Record one AI call made by the scheduled weekly run.
+# A manual regenerate runs in a request thread. Its route opens this scope
+# with the logged-in user, so the AI calls made inside are metered against
+# that user. Like `_run_context`, a ContextVar keeps concurrent requests and
+# the scheduler thread apart.
+_user_metering: ContextVar[str | None] = ContextVar('briefing_user_metering', default=None)
 
-    Outside the scheduled run this is a no-op: user-triggered calls are metered
-    by their routes against the user. Metering never breaks the run:
-    `record_usage` swallows its own errors, and the import is guarded because
-    tests can leave a stub in `sys.modules['services']`.
+
+@contextmanager
+def user_metering(user_id: str):
+    """Meter AI calls made inside the block against `user_id` (bug #509)."""
+    token = _user_metering.set(user_id)
+    try:
+        yield
+    finally:
+        _user_metering.reset(token)
+
+
+def meter_ai_call(usage: dict | None, model: str | None) -> None:
+    """Record one AI call, made by the scheduled weekly run or a manual regenerate.
+
+    Inside `scheduled_run()` the row is a system row (no user). Inside
+    `user_metering()` it belongs to that user. The scheduled run wins if both
+    are set, so a call is never metered twice. Outside both, this is a no-op:
+    the chatbot and portfolio routes meter their own calls. Metering never
+    breaks the call: `record_usage` swallows its own errors, and the import is
+    guarded because tests can leave a stub in `sys.modules['services']`.
     """
-    if not is_scheduled_run() or not model:
+    if not model:
         return
+    if is_scheduled_run():
+        user_id, interaction_type = None, SCHEDULED_INTERACTION_TYPE
+    else:
+        user_id = _user_metering.get()
+        if user_id is None:
+            return
+        interaction_type = REGENERATE_INTERACTION_TYPE
     usage = usage or {}
     try:
         from services.usage_metering import record_usage
         record_usage(
-            user_id=None,
-            interaction_type=SCHEDULED_INTERACTION_TYPE,
+            user_id=user_id,
+            interaction_type=interaction_type,
             model_name=model,
             input_tokens=usage.get('input_tokens'),
             output_tokens=usage.get('output_tokens'),
@@ -304,4 +333,4 @@ def meter_ai_call(usage: dict | None, model: str | None) -> None:
             cache_creation_tokens=usage.get('cache_creation_tokens'),
         )
     except Exception:
-        logger.exception('[briefing_week] Failed to meter scheduled AI call')
+        logger.exception('[briefing_week] Failed to meter %s AI call', interaction_type)

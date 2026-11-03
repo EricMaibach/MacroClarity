@@ -191,9 +191,11 @@ def call_ai_with_tools(client, system_prompt, user_prompt, max_tokens=16000, log
     else:
         result = _call_openai_with_tools(client, system_prompt, user_prompt, max_tokens, log_prefix)
 
-    # Scheduled weekly-run calls are metered here, once per call (tool-loop
-    # turns are already summed into result['usage']). User-triggered calls are
-    # metered by their routes; outside the scheduled run this is a no-op.
+    # Metered here, once per call (tool-loop turns are already summed into
+    # result['usage']), and before the caller parses anything, so a failure
+    # after the API answered is still billed. Writes a row only inside the
+    # scheduled run or a regenerate route's user_metering() scope; the chatbot
+    # and portfolio routes meter their own calls.
     briefing_week.meter_ai_call(result.get('usage'), result.get('model'))
     return result
 
