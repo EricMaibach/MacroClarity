@@ -37,8 +37,8 @@ SIGNALTRACKERS_DIR = REPO_ROOT / 'signaltrackers'
 sys.path.insert(0, str(SIGNALTRACKERS_DIR))
 
 # Shipped defaults, moved to the current generation by US-16.1.2.
-OPUS = 'claude-fable-5-1'
-SONNET = 'claude-sonnet-5'
+OPUS = 'claude-opus-5-5'
+SONNET = 'claude-sonnet-5-5'
 
 
 def load_module(name, relative_path):

@@ -24,8 +24,8 @@ sys.path.insert(0, str(SIGNALTRACKERS_DIR))
 
 # Shipped defaults. US-16.1.2 moved these to the current generation; the
 # assertions below pin whatever config.py ships, not a particular tier.
-OPUS = 'claude-fable-5-1'
-SONNET = 'claude-sonnet-5'
+OPUS = 'claude-opus-5-5'
+SONNET = 'claude-sonnet-5-5'
 
 
 def load_module(name, relative_path, env=None):

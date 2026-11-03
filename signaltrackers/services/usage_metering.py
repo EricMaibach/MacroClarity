@@ -23,6 +23,25 @@ logger = logging.getLogger(__name__)
 # varies per model, so a derived value silently misprices the row.
 MODEL_PRICING = {
     # Anthropic models
+    # Current defaults (#507). Figures copied from
+    # https://platform.claude.com/docs/en/about-claude/pricing (2026-11-02):
+    # cache hits on both are 0.05x input, and 5-minute writes are 1.25x input.
+    'claude-opus-5-5': {
+        'input': Decimal('4.00'),
+        'output': Decimal('20.00'),
+        'cache_read': Decimal('0.20'),
+        'cache_creation': Decimal('5.00'),
+    },
+    'claude-sonnet-5-5': {
+        'input': Decimal('2.00'),
+        'output': Decimal('10.00'),
+        # $0.10, not Sonnet 5's $0.20. This must be its own key: without it,
+        # longest-prefix matching silently prices 5.5 off the Sonnet 5 row.
+        'cache_read': Decimal('0.10'),
+        'cache_creation': Decimal('2.50'),
+    },
+    # Previous defaults -- retained so rollback via ANTHROPIC_MODEL /
+    # ANTHROPIC_CHATBOT_MODEL and historical usage records price correctly.
     'claude-fable-5-1': {
         'input': Decimal('10.00'),
         'output': Decimal('50.00'),

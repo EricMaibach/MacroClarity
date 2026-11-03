@@ -61,8 +61,14 @@ class Config:
     # Anthropic model selection. This module is the single source of truth for
     # model IDs — see the module-level aliases below for code that runs outside
     # a Flask app context.
-    ANTHROPIC_MODEL = os.environ.get('ANTHROPIC_MODEL', 'claude-fable-5-1')
-    ANTHROPIC_CHATBOT_MODEL = os.environ.get('ANTHROPIC_CHATBOT_MODEL', 'claude-sonnet-5')
+    ANTHROPIC_MODEL = os.environ.get('ANTHROPIC_MODEL', 'claude-opus-5-5')
+    ANTHROPIC_CHATBOT_MODEL = os.environ.get('ANTHROPIC_CHATBOT_MODEL', 'claude-sonnet-5-5')
+    # Effort for the /api/chatbot loop. Sent explicitly because Sonnet 5.5
+    # defaults to 'high' (recalibrated), which is more than chat needs (#507).
+    # Server-side only: the request body can never choose it.
+    ANTHROPIC_CHATBOT_EFFORT = normalize_anthropic_effort(
+        os.environ.get('ANTHROPIC_CHATBOT_EFFORT', 'low')
+    )
 
     # Invite-only registration (empty string disables the gate)
     INVITE_CODE = os.environ.get('INVITE_CODE', '')
