@@ -16,6 +16,7 @@ import subprocess
 import threading
 import os
 import atexit
+import functools
 from openai import OpenAI
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -3207,6 +3208,20 @@ def api_scheduler_status():
 
 
 
+def meter_user_ai(view):
+    """Meter the AI calls a regenerate route makes against the logged-in user.
+
+    Bug #509: `call_ai_with_tools` meters each call once, but only inside a
+    metering scope. This opens one for `current_user`, so the user id never
+    comes from the request. Place it under `@login_required`.
+    """
+    @functools.wraps(view)
+    def wrapper(*args, **kwargs):
+        with briefing_week.user_metering(current_user.id):
+            return view(*args, **kwargs)
+    return wrapper
+
+
 @app.route('/api/ai-summary')
 def api_ai_summary():
     """Get the current AI-generated week in review."""
@@ -3222,6 +3237,7 @@ def api_ai_summary():
 @app.route('/api/ai-summary/generate', methods=['POST'])
 @login_required
 @anonymous_rate_limit(CATEGORY_ANALYSIS)
+@meter_user_ai
 def api_generate_summary():
     """Manually trigger AI summary generation."""
     try:
@@ -3261,6 +3277,7 @@ def api_crypto_summary():
 @app.route('/api/crypto-summary/generate', methods=['POST'])
 @login_required
 @anonymous_rate_limit(CATEGORY_ANALYSIS)
+@meter_user_ai
 def api_generate_crypto_summary():
     """Manually trigger crypto AI summary generation."""
     try:
@@ -3299,6 +3316,7 @@ def api_equity_summary():
 @app.route('/api/equity-summary/generate', methods=['POST'])
 @login_required
 @anonymous_rate_limit(CATEGORY_ANALYSIS)
+@meter_user_ai
 def api_generate_equity_summary():
     """Manually trigger equity AI summary generation."""
     try:
@@ -3337,6 +3355,7 @@ def api_rates_summary():
 @app.route('/api/rates-summary/generate', methods=['POST'])
 @login_required
 @anonymous_rate_limit(CATEGORY_ANALYSIS)
+@meter_user_ai
 def api_generate_rates_summary():
     """Manually trigger rates AI summary generation."""
     try:
@@ -3375,6 +3394,7 @@ def api_dollar_summary():
 @app.route('/api/dollar-summary/generate', methods=['POST'])
 @login_required
 @anonymous_rate_limit(CATEGORY_ANALYSIS)
+@meter_user_ai
 def api_generate_dollar_summary():
     """Manually trigger dollar AI summary generation."""
     try:
@@ -3413,6 +3433,7 @@ def api_credit_summary():
 @app.route('/api/credit-summary/generate', methods=['POST'])
 @login_required
 @anonymous_rate_limit(CATEGORY_ANALYSIS)
+@meter_user_ai
 def api_generate_credit_summary():
     """Manually trigger credit AI summary generation."""
     try:
@@ -4485,6 +4506,7 @@ def api_market_conditions_synthesis():
 @app.route('/api/market-conditions-synthesis/generate', methods=['POST'])
 @login_required
 @anonymous_rate_limit(CATEGORY_ANALYSIS)
+@meter_user_ai
 def api_generate_market_synthesis():
     """Manually trigger market conditions synthesis generation."""
     try:

@@ -40,7 +40,7 @@ class AIUsageRecord(db.Model):
 
     VALID_INTERACTION_TYPES = {
         'chatbot', 'portfolio_analysis', 'section_ai', 'sentence_drill_in',
-        'scheduled_briefing',
+        'scheduled_briefing', 'briefing_regenerate',
     }
 
     def __repr__(self):
