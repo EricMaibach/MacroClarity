@@ -27,7 +27,7 @@
 
 | Finding | Evidence | Tracked in |
 |---------|----------|------------|
-| The repo is public, so every secret in history is readable without login. Real keys are also in the history of `.env.example`, not only `.env` | `gh repo view` reports `PUBLIC`. `raw.githubusercontent.com/.../038063c/.env` returned HTTP 200 (status code only). Commit `f372caf` holds real-looking keys in `.env.example`. At least one current `.env` value still matches history | #525 |
+| The repo is public, so every secret in history is readable without login. Real keys are also in the history of `.env.example`, not only `.env` | `gh repo view` reports `PUBLIC`. `raw.githubusercontent.com/.../038063c/.env` returned HTTP 200 (status code only). Commit `f372caf` holds real-looking keys in `.env.example`. | #525 |
 | FRED API key printed to logs on any failed request | Sentinel key at `market_signals.py:227` printed `...observations?series_id=DGS10&api_key=<KEY>&file_type=json`. Same pattern at `credit_signals.py:112` | #530 |
 | Production mode is broken: `SECRET_KEY` is a `property` object, so login returns 500, and the app also starts with no key at all | Section 5.1, runs B, C and E | #517 |
 | Manual briefing regenerates have no limit | 500 `briefing_regenerate` rows recorded for a user, then 10 of 10 requests returned 200 with the limit at 5. `rate_limiting.py:83` counts only `portfolio_analysis` | #532 |
